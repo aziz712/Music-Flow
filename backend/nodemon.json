@@ -1,0 +1,8 @@
+{
+    "ignore": [
+        "*-player-script.js",
+        "node_modules",
+        "dist"
+    ],
+    "ext": "js,mjs,cjs,json"
+}
