@@ -24,23 +24,56 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             const isDarkMode = document.documentElement.classList.contains('dark');
             setIsDark(isDarkMode);
 
-            // Handle ChunkLoadError (common during deployments)
-            const handleError = (e: ErrorEvent) => {
-                if (e.message?.includes('Loading chunk') || e.message?.includes('ChunkLoadError')) {
-                    console.warn('Chunk load failure detected, reloading page...');
-                    window.location.reload();
+            // Robust recovery from ChunkLoadError (common during deployments with stale SW/cache)
+            const handleChunkError = (message: string) => {
+                if (message && (message.includes('Loading chunk') || message.includes('ChunkLoadError'))) {
+                    console.warn('Chunk load failure detected, clearing cache and reloading...');
+                    if ('caches' in window) {
+                        caches.keys().then(names => {
+                            for (let name of names) caches.delete(name);
+                        }).finally(() => {
+                            window.location.reload();
+                        });
+                    } else {
+                        window.location.reload();
+                    }
+                    return true;
                 }
+                return false;
             };
 
-            window.addEventListener('error', handleError);
+            const onError = (e: ErrorEvent) => handleChunkError(e.message);
+            const onRejection = (e: PromiseRejectionEvent) => handleChunkError(e.reason?.message || String(e.reason));
 
+            window.addEventListener('error', onError);
+            window.addEventListener('unhandledrejection', onRejection);
+
+            // Force unregister problematic Service Worker and clear stale caches
             if ('serviceWorker' in navigator) {
-                navigator.serviceWorker.register('/sw.js').catch(err => {
-                    console.error('Service worker registration failed:', err);
+                navigator.serviceWorker.getRegistrations().then(registrations => {
+                    for (let registration of registrations) {
+                        registration.unregister();
+                        console.log('Unregistered stale service worker');
+                    }
                 });
             }
 
-            return () => window.removeEventListener('error', handleError);
+            // Clear any old caches on initial load to ensure fresh assets
+            if ('caches' in window) {
+                caches.keys().then(names => {
+                    for (let name of names) {
+                        if (name === 'music-flow-v1') {
+                            caches.delete(name);
+                            console.log('Cleared stale music-flow-v1 cache');
+                        }
+                    }
+                });
+            }
+
+            return () => {
+                window.removeEventListener('error', onError);
+                window.removeEventListener('unhandledrejection', onRejection);
+            };
         }
     }, []);
 
