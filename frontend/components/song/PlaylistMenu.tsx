@@ -5,6 +5,7 @@ import { Plus, ListMusic, Check } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuthStore } from "@/store/authStore";
 import { Song } from "@/types";
+import { BASE_API_URL } from "@/services/api";
 
 interface PlaylistMenuProps {
     song: Song;
