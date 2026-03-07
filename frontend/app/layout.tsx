@@ -1,9 +1,6 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import "./globals.css";
 import AppLayout from "@/components/AppLayout";
-
-const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
     title: "Music Flow | Modern Music App",
@@ -25,8 +22,8 @@ export default function RootLayout({
     children: React.ReactNode;
 }>) {
     return (
-        <html lang="en" className="dark">
-            <body className={inter.className}>
+        <html lang="en" className="dark" suppressHydrationWarning>
+            <body className="antialiased font-sans" suppressHydrationWarning>
                 <AppLayout>
                     {children}
                 </AppLayout>

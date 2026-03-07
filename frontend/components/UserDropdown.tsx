@@ -35,7 +35,7 @@ export default function UserDropdown() {
         : [
             { icon: LogIn, label: "Login", onClick: () => setAuthModalOpen(true, 'login') },
             { icon: UserPlus, label: "Register", onClick: () => setAuthModalOpen(true, 'register') },
-            { icon: Settings, label: "Settings", onClick: () =>  },
+            { icon: Settings, label: "Settings", onClick: () => router.push("/settings") },
         ];
 
     return (

@@ -253,15 +253,8 @@ export default function MusicPlayer() {
                     onTimeUpdate={handleTimeUpdate}
                     onLoadedMetadata={handleLoadedMetadata}
                     onEnded={() => {
-                        
                         usePlayerStore.getState().playNext();
                     }}
-                    onPlay={() => }
-                    onPause={() => }
-                    onWaiting={() => }
-                    onStalled={() => }
-                    onLoadStart={() => }
-                    onCanPlay={() => }
                     onError={(e) => {
                         const error = (e.target as HTMLAudioElement).error;
                         console.error("Audio Load Error:", {
