@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import AppLayout from "@/components/AppLayout";
+import { Analytics } from "@vercel/analytics/next";
 
 export const metadata: Metadata = {
     title: "Music Flow | Modern Music App",
@@ -27,6 +28,7 @@ export default function RootLayout({
                 <AppLayout>
                     {children}
                 </AppLayout>
+                <Analytics />
             </body>
         </html>
     );
