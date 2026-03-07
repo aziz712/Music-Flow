@@ -48,16 +48,33 @@ exports.streamProxy = (url, res) => {
         return;
     }
 
+    const cookiesStr = process.env.YT_COOKIES;
+    const poToken = process.env.YT_PO_TOKEN;
+    const cookiesPath = path.join(process.platform === 'win32' ? process.env.TEMP || 'C:\\Windows\\Temp' : '/tmp', 'yt_cookies.txt');
+
     // Use multiple clients and geo-bypass to reduce bot detection
     const args = [
         url,
         '-g',
         '-f', 'bestaudio',
-        '--extractor-args', 'youtube:player-client=ios,web,mweb',
+        '--extractor-args', `youtube:player-client=ios,web,mweb${poToken ? `;po_token=${poToken}` : ''}`,
         '--geo-bypass',
         '--no-playlist',
         '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     ];
+
+    // If cookies are provided in env, write them to a temp file for yt-dlp to read
+    if (cookiesStr) {
+        try {
+            // Netscape format requires a specific header if not present
+            const formattedCookies = cookiesStr.startsWith('#') ? cookiesStr : `# Netscape HTTP Cookie File\n${cookiesStr}`;
+            fs.writeFileSync(cookiesPath, formattedCookies);
+            args.push('--cookies', cookiesPath);
+            console.log("Using provided YouTube cookies for extraction.");
+        } catch (err) {
+            console.error("Failed to write YouTube cookies to temp file:", err.message);
+        }
+    }
 
     const ytdl = spawn(binPath, args);
     let audioUrl = '';
