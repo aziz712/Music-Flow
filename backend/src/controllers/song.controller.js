@@ -58,8 +58,26 @@ exports.downloadSong = async (req, res, next) => {
 
         // 3. Stream if we have a valid YouTube URL
         if (downloadUrl) {
+            const handleFallback = async (err) => {
+                console.warn("YouTube streaming failed, attempting Deezer fallback:", err.message);
+                try {
+                    if (title && artist) {
+                        const tracks = await deezerService.searchTracks(`${artist} - ${title}`);
+                        if (tracks && tracks.length > 0 && tracks[0].preview) {
+                            console.log(`Fallback Success: Redirecting to Deezer preview`);
+                            return res.redirect(tracks[0].preview);
+                        }
+                    }
+                    if (!res.headersSent) {
+                        res.status(500).json({ message: "Could not stream from YouTube or Deezer. Please try another song." });
+                    }
+                } catch (fallbackError) {
+                    console.error("Fallback process failed:", fallbackError.message);
+                    if (!res.headersSent) next(err);
+                }
+            };
 
-            youtubeService.streamProxy(downloadUrl, res);
+            youtubeService.streamProxy(downloadUrl, res, handleFallback);
             return;
         }
 

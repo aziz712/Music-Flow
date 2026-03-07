@@ -38,13 +38,12 @@ exports.search = async (query) => {
     }
 };
 
-exports.streamProxy = (url, res) => {
+exports.streamProxy = (url, res, onError) => {
     const isWindows = process.platform === 'win32';
     const binPath = path.join(BIN_DIR, isWindows ? 'yt-dlp.exe' : 'yt-dlp');
     // Check Cache
     const cached = urlCache.get(url);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-
         pipeTranscodedAudio(cached.url, res);
         return;
     }
@@ -56,7 +55,8 @@ exports.streamProxy = (url, res) => {
         '-f', 'bestaudio',
         '--extractor-args', 'youtube:player-client=ios,web,mweb',
         '--geo-bypass',
-        '--no-playlist'
+        '--no-playlist',
+        '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     ];
 
     const ytdl = spawn(binPath, args);
@@ -82,33 +82,34 @@ exports.streamProxy = (url, res) => {
     ytdl.on('close', (code) => {
         if (code !== 0) {
             console.error(`yt-dlp failed with code ${code} for URL: ${url}`);
-            if (code === 1) {
-                // If it's a bot detection error, we might want to flag it
-                console.warn("Potential bot detection or age gate block detected.");
+            if (onError) {
+                onError(new Error(`yt-dlp failed with code ${code}`));
+            } else {
+                if (!res.headersSent) res.status(500).json({
+                    error: "Extraction Failed",
+                    code: code,
+                    details: "YouTube is blocking the request. Try another song or search directly."
+                });
             }
-            if (!res.headersSent) res.status(500).json({
-                error: "Extraction Failed",
-                code: code,
-                details: "YouTube is blocking the request. Try another song or search directly."
-            });
             return;
         }
         const cleanUrl = audioUrl.trim();
         if (!cleanUrl) {
             console.error("No YouTube audio URL extracted");
-            if (!res.headersSent) res.status(500).send("No URL found");
+            if (onError) {
+                onError(new Error("No URL found"));
+            } else {
+                if (!res.headersSent) res.status(500).send("No URL found");
+            }
             return;
         }
 
-
         urlCache.set(url, { url: cleanUrl, timestamp: Date.now() });
-        pipeTranscodedAudio(cleanUrl, res);
+        pipeTranscodedAudio(cleanUrl, res, onError);
     });
 };
 
-const pipeTranscodedAudio = (targetUrl, expressRes) => {
-
-
+const pipeTranscodedAudio = (targetUrl, expressRes, onError) => {
     expressRes.setHeader('Content-Type', 'audio/mpeg');
     expressRes.setHeader('Transfer-Encoding', 'chunked');
     expressRes.setHeader('Cache-Control', 'no-cache');
@@ -116,40 +117,49 @@ const pipeTranscodedAudio = (targetUrl, expressRes) => {
     expressRes.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     expressRes.setHeader('Accept-Ranges', 'bytes');
 
-    const ffmpegPath = 'ffmpeg'; // or e.g. 'C:\\ffmpeg\\ffmpeg.exe'
+    const ffmpegPath = 'ffmpeg';
 
+    try {
+        const ffmpegProcess = spawn(ffmpegPath, [
+            '-reconnect', '1',
+            '-reconnect_streamed', '1',
+            '-reconnect_delay_max', '5',
+            '-i', targetUrl,
+            '-f', 'mp3',
+            '-acodec', 'libmp3lame',
+            '-ab', '128k',
+            '-ar', '44100',
+            '-map', 'a',
+            'pipe:1'
+        ]);
 
-    const ffmpegProcess = spawn(ffmpegPath, [
-        '-reconnect', '1',
-        '-reconnect_streamed', '1',
-        '-reconnect_delay_max', '5',
-        '-i', targetUrl,
-        '-f', 'mp3',
-        '-acodec', 'libmp3lame',
-        '-ab', '128k',
-        '-ar', '44100',
-        '-map', 'a',
-        'pipe:1'
-    ]);
+        ffmpegProcess.stdout.pipe(expressRes);
 
-    ffmpegProcess.stdout.pipe(expressRes);
+        ffmpegProcess.on('error', (err) => {
+            console.error("FFmpeg failed to start:", err.message);
+            if (onError) onError(err);
+        });
 
-    ffmpegProcess.stderr.on('data', (data) => {
-        if (data.toString().includes('Error')) {
-            console.error(`FFmpeg Error: ${data}`);
-        }
-    });
+        ffmpegProcess.stderr.on('data', (data) => {
+            if (data.toString().includes('Error')) {
+                console.error(`FFmpeg Error: ${data}`);
+            }
+        });
 
-    ffmpegProcess.on('close', (code) => {
-        if (code !== 0 && code !== null) {
-            console.error(`FFmpeg process failed with code ${code} for target: ${targetUrl.substring(0, 100)}...`);
-        }
-    });
+        ffmpegProcess.on('close', (code) => {
+            if (code !== 0 && code !== null) {
+                console.error(`FFmpeg process failed with code ${code} for target: ${targetUrl.substring(0, 100)}...`);
+                // We can't really fallback here as headers are usually sent
+            }
+        });
 
-    expressRes.on('close', () => {
-
-        ffmpegProcess.kill('SIGKILL');
-    });
+        expressRes.on('close', () => {
+            ffmpegProcess.kill('SIGKILL');
+        });
+    } catch (e) {
+        console.error("Critical FFmpeg spawn error:", e.message);
+        if (onError) onError(e);
+    }
 };
 
 exports.getVideoInfo = async (url) => {
