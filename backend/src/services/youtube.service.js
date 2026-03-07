@@ -49,7 +49,17 @@ exports.streamProxy = (url, res) => {
         return;
     }
 
-    const ytdl = spawn(binPath, [url, '-g', '-f', 'bestaudio']);
+    // Use multiple clients and geo-bypass to reduce bot detection
+    const args = [
+        url,
+        '-g',
+        '-f', 'bestaudio',
+        '--extractor-args', 'youtube:player-client=ios,web,mweb',
+        '--geo-bypass',
+        '--no-playlist'
+    ];
+
+    const ytdl = spawn(binPath, args);
     let audioUrl = '';
 
     // Fix permissions on Linux/Docker/Render
@@ -72,7 +82,15 @@ exports.streamProxy = (url, res) => {
     ytdl.on('close', (code) => {
         if (code !== 0) {
             console.error(`yt-dlp failed with code ${code} for URL: ${url}`);
-            if (!res.headersSent) res.status(500).send("Extraction Failed");
+            if (code === 1) {
+                // If it's a bot detection error, we might want to flag it
+                console.warn("Potential bot detection or age gate block detected.");
+            }
+            if (!res.headersSent) res.status(500).json({
+                error: "Extraction Failed",
+                code: code,
+                details: "YouTube is blocking the request. Try another song or search directly."
+            });
             return;
         }
         const cleanUrl = audioUrl.trim();
