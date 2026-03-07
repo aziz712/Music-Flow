@@ -38,7 +38,7 @@ exports.search = async (query) => {
     }
 };
 
-exports.streamProxy = (url, res, onError) => {
+exports.streamProxy = (url, res) => {
     const isWindows = process.platform === 'win32';
     const binPath = path.join(BIN_DIR, isWindows ? 'yt-dlp.exe' : 'yt-dlp');
     // Check Cache
@@ -82,34 +82,26 @@ exports.streamProxy = (url, res, onError) => {
     ytdl.on('close', (code) => {
         if (code !== 0) {
             console.error(`yt-dlp failed with code ${code} for URL: ${url}`);
-            if (onError) {
-                onError(new Error(`yt-dlp failed with code ${code}`));
-            } else {
-                if (!res.headersSent) res.status(500).json({
-                    error: "Extraction Failed",
-                    code: code,
-                    details: "YouTube is blocking the request. Try another song or search directly."
-                });
-            }
+            if (!res.headersSent) res.status(500).json({
+                error: "Extraction Failed",
+                code: code,
+                details: "YouTube is blocking the request. Try another song or search directly."
+            });
             return;
         }
         const cleanUrl = audioUrl.trim();
         if (!cleanUrl) {
             console.error("No YouTube audio URL extracted");
-            if (onError) {
-                onError(new Error("No URL found"));
-            } else {
-                if (!res.headersSent) res.status(500).send("No URL found");
-            }
+            if (!res.headersSent) res.status(500).send("No URL found");
             return;
         }
 
         urlCache.set(url, { url: cleanUrl, timestamp: Date.now() });
-        pipeTranscodedAudio(cleanUrl, res, onError);
+        pipeTranscodedAudio(cleanUrl, res);
     });
 };
 
-const pipeTranscodedAudio = (targetUrl, expressRes, onError) => {
+const pipeTranscodedAudio = (targetUrl, expressRes) => {
     expressRes.setHeader('Content-Type', 'audio/mpeg');
     expressRes.setHeader('Transfer-Encoding', 'chunked');
     expressRes.setHeader('Cache-Control', 'no-cache');
@@ -137,7 +129,6 @@ const pipeTranscodedAudio = (targetUrl, expressRes, onError) => {
 
         ffmpegProcess.on('error', (err) => {
             console.error("FFmpeg failed to start:", err.message);
-            if (onError) onError(err);
         });
 
         ffmpegProcess.stderr.on('data', (data) => {
@@ -158,7 +149,6 @@ const pipeTranscodedAudio = (targetUrl, expressRes, onError) => {
         });
     } catch (e) {
         console.error("Critical FFmpeg spawn error:", e.message);
-        if (onError) onError(e);
     }
 };
 

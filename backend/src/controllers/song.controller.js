@@ -1,5 +1,4 @@
 const youtubeService = require('../services/youtube.service');
-const deezerService = require('../services/deezer.service');
 const recommendationService = require('../services/recommendation.service');
 const SongInteraction = require('../models/SongInteraction');
 
@@ -58,26 +57,7 @@ exports.downloadSong = async (req, res, next) => {
 
         // 3. Stream if we have a valid YouTube URL
         if (downloadUrl) {
-            const handleFallback = async (err) => {
-                console.warn("YouTube streaming failed, attempting Deezer fallback:", err.message);
-                try {
-                    if (title && artist) {
-                        const tracks = await deezerService.searchTracks(`${artist} - ${title}`);
-                        if (tracks && tracks.length > 0 && tracks[0].preview) {
-                            console.log(`Fallback Success: Redirecting to Deezer preview`);
-                            return res.redirect(tracks[0].preview);
-                        }
-                    }
-                    if (!res.headersSent) {
-                        res.status(500).json({ message: "Could not stream from YouTube or Deezer. Please try another song." });
-                    }
-                } catch (fallbackError) {
-                    console.error("Fallback process failed:", fallbackError.message);
-                    if (!res.headersSent) next(err);
-                }
-            };
-
-            youtubeService.streamProxy(downloadUrl, res, handleFallback);
+            youtubeService.streamProxy(downloadUrl, res);
             return;
         }
 
@@ -100,23 +80,6 @@ exports.downloadSong = async (req, res, next) => {
 
     } catch (error) {
         console.error("Download Error:", error);
-
-        // 4. Emergency Fallback: If YouTube Totally Fails (e.g. Code 1 Bot Block)
-        // We try to find it on Deezer and redirect to preview
-        try {
-            const { title, artist } = req.query;
-            if (title && artist) {
-                console.log(`Fallback: Searching Deezer for ${artist} - ${title}`);
-                const tracks = await deezerService.searchTracks(`${artist} - ${title}`);
-                if (tracks && tracks.length > 0 && tracks[0].preview) {
-                    console.log(`Fallback Success: Redirecting to Deezer preview`);
-                    return res.redirect(tracks[0].preview);
-                }
-            }
-        } catch (fallbackError) {
-            console.error("Emergency Fallback Failed:", fallbackError.message);
-        }
-
         if (!res.headersSent) next(error);
     }
 };
