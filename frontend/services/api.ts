@@ -1,8 +1,12 @@
 import axios from 'axios';
 import { Song } from '@/types';
 
-// Support for both production and local development
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+export const BASE_API_URL = process.env.NEXT_PUBLIC_API_URL ||
+    (process.env.NODE_ENV === 'production'
+        ? 'https://music-flow-uww7.onrender.com/api'
+        : 'http://localhost:5000/api');
+
+const API_URL = BASE_API_URL;
 
 import { useAuthStore } from '@/store/authStore';
 

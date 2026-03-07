@@ -7,7 +7,7 @@ import { Play, Pause, SkipBack, SkipForward, Volume2, Heart, ListPlus, ListMusic
 import { Button } from "../ui/Button";
 import { motion, AnimatePresence } from "framer-motion";
 import PlaylistMenu from "../song/PlaylistMenu";
-import { trackInteraction, toggleFavorite } from "@/services/api";
+import { trackInteraction, toggleFavorite, BASE_API_URL } from "@/services/api";
 
 export default function MusicPlayer() {
     const { currentSong, isPlaying, togglePlay, volume, setVolume } = usePlayerStore();
@@ -247,7 +247,7 @@ export default function MusicPlayer() {
 
                 <audio
                     ref={audioRef}
-                    src={`${process.env.NEXT_PUBLIC_API_URL}/songs/download?url=${encodeURIComponent(currentSong.link || '')}&title=${encodeURIComponent(currentSong.title || '')}&artist=${encodeURIComponent(currentSong.artist?.name || '')}`}
+                    src={`${BASE_API_URL}/songs/download?url=${encodeURIComponent(currentSong.link || '')}&title=${encodeURIComponent(currentSong.title || '')}&artist=${encodeURIComponent(currentSong.artist?.name || '')}`}
                     crossOrigin="anonymous"
                     autoPlay={isPlaying}
                     onTimeUpdate={handleTimeUpdate}

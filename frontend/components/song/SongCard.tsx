@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Play, Pause, Download, CheckCircle2, Circle, Heart, Plus } from "lucide-react";
 import { usePlayerStore } from "@/store/playerStore";
 import { useAuthStore } from "@/store/authStore";
-import { trackHistory, toggleFavorite } from "@/services/api";
+import { trackHistory, toggleFavorite, BASE_API_URL } from "@/services/api";
 import { Button } from "../ui/Button";
 import PlaylistMenu from "./PlaylistMenu";
 
@@ -61,7 +61,7 @@ export default function SongCard({ song, isSelected, onToggleSelect }: SongCardP
         e.stopPropagation();
         setIsDownloading(true);
         try {
-            const url = `${process.env.NEXT_PUBLIC_API_URL}/songs/download?url=${encodeURIComponent(song.link)}&title=${encodeURIComponent(song.title)}&artist=${encodeURIComponent(song.artist.name)}`;
+            const url = `${BASE_API_URL}/songs/download?url=${encodeURIComponent(song.link)}&title=${encodeURIComponent(song.title)}&artist=${encodeURIComponent(song.artist.name)}`;
             const response = await fetch(url);
             if (!response.ok) throw new Error("Download failed");
 
@@ -91,7 +91,7 @@ export default function SongCard({ song, isSelected, onToggleSelect }: SongCardP
 
         setIsResolving(true);
         try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/songs/resolve?title=${encodeURIComponent(song.title)}&artist=${encodeURIComponent(song.artist.name)}`);
+            const res = await fetch(`${BASE_API_URL}/songs/resolve?title=${encodeURIComponent(song.title)}&artist=${encodeURIComponent(song.artist.name)}`);
             const data = await res.json();
             if (data.videoId) {
                 usePlayerStore.getState().openVideo(data.videoId);
@@ -182,7 +182,9 @@ export default function SongCard({ song, isSelected, onToggleSelect }: SongCardP
 
                 <div className="flex items-center justify-between mt-4 pt-3 border-t border-border/20">
                     <span className="text-[10px] font-medium text-muted-foreground/70 bg-muted/50 px-2 py-0.5 rounded-full">
-                        {new Date(song.duration * 1000).toISOString().substr(14, 5)}
+                        {song.duration && !isNaN(song.duration) && song.duration > 0
+                            ? new Date(song.duration * 1000).toISOString().substr(14, 5)
+                            : "0:00"}
                     </span>
 
                     <button

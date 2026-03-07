@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "./ui/Button";
+import { BASE_API_URL } from "@/services/api";
 import { Input } from "./ui/Input";
 import { motion, AnimatePresence } from "framer-motion";
 import { X } from "lucide-react";
@@ -41,7 +42,7 @@ export default function AuthModal({ isOpen, onClose, mode = 'login' }: AuthModal
             const body = isLogin ? { email, password } : { name, email, password };
 
             // Use the base URL without /api because endpoints here include /api/users/...
-            const baseUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api').replace('/api', '');
+            const baseUrl = BASE_API_URL.replace('/api', '');
             const res = await fetch(`${baseUrl}${endpoint}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

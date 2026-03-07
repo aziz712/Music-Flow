@@ -3,18 +3,18 @@ import SongSlider from "@/components/song/SongSlider";
 import HomeHero from "@/components/home/HomeHero";
 import FeaturesSection from "@/components/home/FeaturesSection";
 import { Song } from "@/types";
-
 import { cookies } from "next/headers";
+import { BASE_API_URL } from "@/services/api";
 
 export const dynamic = 'force-dynamic';
 
 async function getTrendingSongs(): Promise<Song[]> {
     try {
-        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/songs/trending`);
-        if (!res.ok) throw new Error('Failed to fetch trending');
+        const res = await fetch(`${BASE_API_URL}/songs/trending`, { next: { revalidate: 3600 } });
+        if (!res.ok) throw new Error(`Status: ${res.status}`);
         return res.json();
     } catch (error) {
-        console.error(error);
+        console.error("Trending fetch error:", error);
         return [];
     }
 }
@@ -24,8 +24,9 @@ async function getRecommendedSongs(): Promise<Song[]> {
         const cookieStore = cookies();
         const token = cookieStore.get('auth-token')?.value;
 
-        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/songs/recommendations`, {
-            headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+        const res = await fetch(`${BASE_API_URL}/songs/recommendations`, {
+            headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+            next: { revalidate: 3600 }
         });
         if (!res.ok) {
             const errText = await res.text();
