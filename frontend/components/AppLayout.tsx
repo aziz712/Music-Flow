@@ -14,18 +14,33 @@ const AuthModal = dynamic(() => import("./AuthModal"), { ssr: false });
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
     const [isDark, setIsDark] = useState(false);
+    const [isHydrated, setIsHydrated] = useState(false);
     const { isAuthModalOpen, setAuthModalOpen, authMode } = useAuthStore();
 
     useEffect(() => {
+        setIsHydrated(true);
+
         if (typeof window !== 'undefined') {
             const isDarkMode = document.documentElement.classList.contains('dark');
             setIsDark(isDarkMode);
+
+            // Handle ChunkLoadError (common during deployments)
+            const handleError = (e: ErrorEvent) => {
+                if (e.message?.includes('Loading chunk') || e.message?.includes('ChunkLoadError')) {
+                    console.warn('Chunk load failure detected, reloading page...');
+                    window.location.reload();
+                }
+            };
+
+            window.addEventListener('error', handleError);
 
             if ('serviceWorker' in navigator) {
                 navigator.serviceWorker.register('/sw.js').catch(err => {
                     console.error('Service worker registration failed:', err);
                 });
             }
+
+            return () => window.removeEventListener('error', handleError);
         }
     }, []);
 
@@ -34,6 +49,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         setIsDark(newMode);
         document.documentElement.classList.toggle('dark', newMode);
     };
+
+    if (!isHydrated) {
+        return (
+            <div className="min-h-screen bg-background flex items-center justify-center">
+                <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen bg-background text-foreground flex flex-col">

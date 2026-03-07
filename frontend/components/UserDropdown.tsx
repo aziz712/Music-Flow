@@ -6,7 +6,6 @@ import { useAuthStore } from "@/store/authStore";
 import { Button } from "./ui/Button";
 import { User, LogOut, Settings, Heart, ListMusic, UserCircle, LogIn, UserPlus } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import AuthModal from "./AuthModal";
 
 export default function UserDropdown() {
     const { user, isAuthenticated, logout, setAuthModalOpen } = useAuthStore();
