@@ -22,7 +22,7 @@ export default function PlaylistMenu({ song, onClose }: PlaylistMenuProps) {
     const fetchPlaylists = async () => {
         if (!isAuthenticated) return;
         try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/playlists/my`, {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/playlists/my`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             const data = await res.json();
@@ -48,7 +48,7 @@ export default function PlaylistMenu({ song, onClose }: PlaylistMenuProps) {
 
     const addToPlaylist = async (playlistId: string) => {
         try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/playlists/${playlistId}/songs`, {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/playlists/${playlistId}/songs`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -76,7 +76,7 @@ export default function PlaylistMenu({ song, onClose }: PlaylistMenuProps) {
         if (!newPlaylistName.trim()) return;
 
         try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/playlists`, {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/playlists`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

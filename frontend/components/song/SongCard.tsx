@@ -61,7 +61,7 @@ export default function SongCard({ song, isSelected, onToggleSelect }: SongCardP
         e.stopPropagation();
         setIsDownloading(true);
         try {
-            const url = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/songs/download?url=${encodeURIComponent(song.link)}&title=${encodeURIComponent(song.title)}&artist=${encodeURIComponent(song.artist.name)}`;
+            const url = `${process.env.NEXT_PUBLIC_API_URL}/songs/download?url=${encodeURIComponent(song.link)}&title=${encodeURIComponent(song.title)}&artist=${encodeURIComponent(song.artist.name)}`;
             const response = await fetch(url);
             if (!response.ok) throw new Error("Download failed");
 
@@ -91,7 +91,7 @@ export default function SongCard({ song, isSelected, onToggleSelect }: SongCardP
 
         setIsResolving(true);
         try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/songs/resolve?title=${encodeURIComponent(song.title)}&artist=${encodeURIComponent(song.artist.name)}`);
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/songs/resolve?title=${encodeURIComponent(song.title)}&artist=${encodeURIComponent(song.artist.name)}`);
             const data = await res.json();
             if (data.videoId) {
                 usePlayerStore.getState().openVideo(data.videoId);

@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 
 async function getTrendingSongs(): Promise<Song[]> {
     try {
-        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/songs/trending`);
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/songs/trending`);
         if (!res.ok) throw new Error('Failed to fetch trending');
         return res.json();
     } catch (error) {
@@ -24,7 +24,7 @@ async function getRecommendedSongs(): Promise<Song[]> {
         const cookieStore = cookies();
         const token = cookieStore.get('auth-token')?.value;
 
-        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/songs/recommendations`, {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/songs/recommendations`, {
             headers: token ? { 'Authorization': `Bearer ${token}` } : {}
         });
         if (!res.ok) {
