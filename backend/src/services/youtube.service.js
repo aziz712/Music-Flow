@@ -38,11 +38,12 @@ exports.search = async (query) => {
 };
 
 exports.streamProxy = (url, res) => {
-    const binPath = path.join(BIN_DIR, 'yt-dlp.exe');
+    const isWindows = process.platform === 'win32';
+    const binPath = path.join(BIN_DIR, isWindows ? 'yt-dlp.exe' : 'yt-dlp');
     // Check Cache
     const cached = urlCache.get(url);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-        
+
         pipeTranscodedAudio(cached.url, res);
         return;
     }
@@ -50,7 +51,7 @@ exports.streamProxy = (url, res) => {
     const ytdl = spawn(binPath, [url, '-g', '-f', 'bestaudio']);
     let audioUrl = '';
 
-    
+
 
     ytdl.stdout.on('data', (data) => audioUrl += data.toString());
     ytdl.stderr.on('data', (data) => console.error(`yt-dlp stderr: ${data}`));
@@ -68,14 +69,14 @@ exports.streamProxy = (url, res) => {
             return;
         }
 
-        
+
         urlCache.set(url, { url: cleanUrl, timestamp: Date.now() });
         pipeTranscodedAudio(cleanUrl, res);
     });
 };
 
 const pipeTranscodedAudio = (targetUrl, expressRes) => {
-    
+
 
     expressRes.setHeader('Content-Type', 'audio/mpeg');
     expressRes.setHeader('Transfer-Encoding', 'chunked');
@@ -85,7 +86,7 @@ const pipeTranscodedAudio = (targetUrl, expressRes) => {
     expressRes.setHeader('Accept-Ranges', 'bytes');
 
     const ffmpegPath = 'ffmpeg'; // or e.g. 'C:\\ffmpeg\\ffmpeg.exe'
-    
+
 
     const ffmpegProcess = spawn(ffmpegPath, [
         '-reconnect', '1',
@@ -109,20 +110,21 @@ const pipeTranscodedAudio = (targetUrl, expressRes) => {
     });
 
     ffmpegProcess.on('close', (code) => {
-        
+
         if (code !== 0 && code !== null) {
             console.error(`FFmpeg process failed!`);
         }
     });
 
     expressRes.on('close', () => {
-        
+
         ffmpegProcess.kill('SIGKILL');
     });
 };
 
 exports.getVideoInfo = async (url) => {
-    const binPath = path.join(BIN_DIR, 'yt-dlp.exe');
+    const isWindows = process.platform === 'win32';
+    const binPath = path.join(BIN_DIR, isWindows ? 'yt-dlp.exe' : 'yt-dlp');
     return new Promise((resolve, reject) => {
         const ytdlp = spawn(binPath, [url, '--dump-json']);
         let data = '';

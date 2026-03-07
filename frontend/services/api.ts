@@ -1,8 +1,8 @@
 import axios from 'axios';
 import { Song } from '@/types';
 
-// Assuming backend runs on port 5000 locally
-const API_URL = 'https://music-flow-uww7.onrender.com/api';
+// Support for both production and local development
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
 
 import { useAuthStore } from '@/store/authStore';
 

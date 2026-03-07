@@ -40,7 +40,9 @@ export default function AuthModal({ isOpen, onClose, mode = 'login' }: AuthModal
             const endpoint = isLogin ? '/api/users/login' : '/api/users/register';
             const body = isLogin ? { email, password } : { name, email, password };
 
-            const res = await fetch(`http://localhost:5000${endpoint}`, {
+            // Use the base URL without /api because endpoints here include /api/users/...
+            const baseUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api').replace('/api', '');
+            const res = await fetch(`${baseUrl}${endpoint}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),

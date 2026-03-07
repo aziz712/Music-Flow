@@ -28,7 +28,7 @@ export default function BulkDownloadButton({ selectedSongs, onDownloadComplete }
                 // Use the download/stream endpoint logic URL or preview if available
                 // For demonstration, we'll construct the download URL similar to single download
                 // NOTE: In production, backend should resolve streams internally if needed
-                downloadUrl: `http://localhost:5000/api/songs/download?url=${encodeURIComponent(song.link)}&title=${encodeURIComponent(song.title)}&artist=${encodeURIComponent(song.artist.name)}`
+                downloadUrl: `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/songs/download?url=${encodeURIComponent(song.link)}&title=${encodeURIComponent(song.title)}&artist=${encodeURIComponent(song.artist.name)}`
             }));
 
             // In our backend implementation, we are streaming from URLs. 
@@ -37,7 +37,7 @@ export default function BulkDownloadButton({ selectedSongs, onDownloadComplete }
             // Ideally, the backend bulk downloader should use the resolving logic internally.
             // But for now, we pass the "downloadUrl" which points to our own server's single download endpoint.
 
-            const response = await fetch("http://localhost:5000/api/download/bulk", {
+            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/download/bulk`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ songs: songsPayload }),
