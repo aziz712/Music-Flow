@@ -3,6 +3,7 @@ const { BIN_DIR } = require('ytdlp-nodejs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { PassThrough } = require('stream');
+const fs = require('fs');
 
 // Simple in-memory cache for stream URLs to avoid re-spawning yt-dlp
 const urlCache = new Map();
@@ -51,14 +52,26 @@ exports.streamProxy = (url, res) => {
     const ytdl = spawn(binPath, [url, '-g', '-f', 'bestaudio']);
     let audioUrl = '';
 
-
+    // Fix permissions on Linux/Docker/Render
+    if (!isWindows) {
+        try {
+            fs.chmodSync(binPath, '755');
+        } catch (e) {
+            console.error("Could not set yt-dlp permissions:", e.message);
+        }
+    }
 
     ytdl.stdout.on('data', (data) => audioUrl += data.toString());
-    ytdl.stderr.on('data', (data) => console.error(`yt-dlp stderr: ${data}`));
+    ytdl.stderr.on('data', (data) => {
+        const stderrStr = data.toString();
+        if (stderrStr.includes('ERROR') || stderrStr.includes('Warning')) {
+            console.error(`yt-dlp stderr: ${stderrStr}`);
+        }
+    });
 
     ytdl.on('close', (code) => {
         if (code !== 0) {
-            console.error(`yt-dlp failed with code ${code}`);
+            console.error(`yt-dlp failed with code ${code} for URL: ${url}`);
             if (!res.headersSent) res.status(500).send("Extraction Failed");
             return;
         }
@@ -110,9 +123,8 @@ const pipeTranscodedAudio = (targetUrl, expressRes) => {
     });
 
     ffmpegProcess.on('close', (code) => {
-
         if (code !== 0 && code !== null) {
-            console.error(`FFmpeg process failed!`);
+            console.error(`FFmpeg process failed with code ${code} for target: ${targetUrl.substring(0, 100)}...`);
         }
     });
 
