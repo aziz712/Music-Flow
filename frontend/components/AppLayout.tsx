@@ -28,14 +28,21 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             const handleChunkError = (message: string) => {
                 if (message && (message.includes('Loading chunk') || message.includes('ChunkLoadError'))) {
                     console.warn('Chunk load failure detected, clearing cache and reloading...');
-                    if ('caches' in window) {
-                        caches.keys().then(names => {
-                            for (let name of names) caches.delete(name);
-                        }).finally(() => {
+
+                    const triggerReload = () => {
+                        if (typeof window !== 'undefined') {
                             window.location.reload();
-                        });
+                        }
+                    };
+
+                    if (typeof window !== 'undefined' && 'caches' in window) {
+                        window.caches.keys().then(names => {
+                            return Promise.all(names.map(name => window.caches.delete(name)));
+                        }).catch(() => {
+                            // Ignore cache clear errors and reload anyway
+                        }).finally(triggerReload);
                     } else {
-                        window.location.reload();
+                        triggerReload();
                     }
                     return true;
                 }
