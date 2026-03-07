@@ -2,7 +2,7 @@ import axios from 'axios';
 import { Song } from '@/types';
 
 // Assuming backend runs on port 5000 locally
-const API_URL = 'http://localhost:5000/api';
+const API_URL = 'https://music-flow-uww7.onrender.com/api';
 
 import { useAuthStore } from '@/store/authStore';
 
