@@ -2,7 +2,7 @@ const http = require('http');
 
 console.log("Testing stream API...");
 
-const req = http.get('http://localhost:5000/api/songs/download?url=https://youtube.com/watch?v=SOJpE1KMUbo', (res) => {
+const req = http.get('http://localhost:5000/api/songs/download?url=https://youtube.com/watch?v=SOJpE1KMUbo&title=Imagine&artist=John%20Lennon&download=true', (res) => {
     console.log('STATUS:', res.statusCode);
     console.log('HEADERS:', JSON.stringify(res.headers, null, 2));
 

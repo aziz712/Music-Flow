@@ -165,7 +165,16 @@ const pipeNativeAudio = (targetUrl, expressReq, expressRes, isDownload = false) 
         headers['Cross-Origin-Resource-Policy'] = 'cross-origin';
 
         if (isDownload) {
-            headers['Content-Disposition'] = `attachment; filename="song.m4a"`;
+            let title = expressReq?.query?.title || 'Unknown Title';
+            let artist = expressReq?.query?.artist || 'Unknown Artist';
+
+            // Sanitize filename for HTTP header safety and filesystem compatibility
+            let safeFilename = `${artist} - ${title}.m4a`.replace(/[^a-zA-Z0-9 \-()_.]/g, '');
+            if (!safeFilename.trim() || safeFilename === '.m4a') {
+                safeFilename = 'song.m4a';
+            }
+
+            headers['Content-Disposition'] = `attachment; filename="${safeFilename}"`;
         } else {
             headers['Accept-Ranges'] = 'bytes';
             headers['Connection'] = 'keep-alive';
