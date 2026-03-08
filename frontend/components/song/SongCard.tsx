@@ -61,19 +61,20 @@ export default function SongCard({ song, isSelected, onToggleSelect }: SongCardP
         e.stopPropagation();
         setIsDownloading(true);
         try {
-            const url = `${BASE_API_URL}/songs/download?url=${encodeURIComponent(song.link)}&title=${encodeURIComponent(song.title)}&artist=${encodeURIComponent(song.artist.name)}`;
-            const response = await fetch(url);
-            if (!response.ok) throw new Error("Download failed");
+            const url = `${BASE_API_URL}/songs/download?url=${encodeURIComponent(song.link)}&title=${encodeURIComponent(song.title)}&artist=${encodeURIComponent(song.artist.name)}&download=true`;
 
-            const blob = await response.blob();
-            const downloadUrl = window.URL.createObjectURL(blob);
+            // Native download using anchor tag to bypass heavy Blob load
             const a = document.createElement("a");
-            a.href = downloadUrl;
-            a.download = `${song.artist.name} - ${song.title}.mp3`;
+            a.href = url;
+            a.download = `${song.artist.name} - ${song.title}.m4a`;
+            // Add target blank to avoid page nav if headers fail, although attachment header prevents it
+            a.target = "_blank";
             document.body.appendChild(a);
             a.click();
             a.remove();
-            window.URL.revokeObjectURL(downloadUrl);
+
+            // Short delay to allow visual feedback
+            await new Promise(res => setTimeout(res, 1500));
         } catch (error) {
             alert("Failed to download song. Please try again.");
             console.error(error);

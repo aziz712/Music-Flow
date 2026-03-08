@@ -39,13 +39,13 @@ exports.search = async (query) => {
     }
 };
 
-exports.streamProxy = (url, res, req) => {
+exports.streamProxy = (url, res, req, isDownload = false) => {
     const isWindows = process.platform === 'win32';
     const binPath = path.join(BIN_DIR, isWindows ? 'yt-dlp.exe' : 'yt-dlp');
     // Check Cache
     const cached = urlCache.get(url);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-        pipeNativeAudio(cached.url, req, res);
+        pipeNativeAudio(cached.url, req, res, isDownload);
         return;
     }
 
@@ -130,11 +130,11 @@ exports.streamProxy = (url, res, req) => {
 
         console.log(`Successfully extracted URL for ${url.substring(0, 30)}...`);
         urlCache.set(url, { url: cleanUrl, timestamp: Date.now() });
-        pipeNativeAudio(cleanUrl, req, res);
+        pipeNativeAudio(cleanUrl, req, res, isDownload);
     });
 };
 
-const pipeNativeAudio = (targetUrl, expressReq, expressRes) => {
+const pipeNativeAudio = (targetUrl, expressReq, expressRes, isDownload = false) => {
     const urlObj = new URL(targetUrl);
 
     const options = {
@@ -146,7 +146,7 @@ const pipeNativeAudio = (targetUrl, expressReq, expressRes) => {
     };
 
     // Forward the Range header to YouTube for seeking support
-    if (expressReq && expressReq.headers.range) {
+    if (expressReq && expressReq.headers.range && !isDownload) {
         options.headers['Range'] = expressReq.headers.range;
     }
 
@@ -163,8 +163,13 @@ const pipeNativeAudio = (targetUrl, expressReq, expressRes) => {
         headers['Expires'] = '0';
         headers['Access-Control-Allow-Origin'] = '*';
         headers['Cross-Origin-Resource-Policy'] = 'cross-origin';
-        headers['Accept-Ranges'] = 'bytes';
-        headers['Connection'] = 'keep-alive';
+
+        if (isDownload) {
+            headers['Content-Disposition'] = `attachment; filename="song.m4a"`;
+        } else {
+            headers['Accept-Ranges'] = 'bytes';
+            headers['Connection'] = 'keep-alive';
+        }
 
         expressRes.set(headers);
 
@@ -186,6 +191,22 @@ const pipeNativeAudio = (targetUrl, expressReq, expressRes) => {
     }
 };
 
+exports.getStream = (url) => {
+    const isWindows = process.platform === 'win32';
+    const binPath = path.join(BIN_DIR, isWindows ? 'yt-dlp.exe' : 'yt-dlp');
+    const cookiesStr = process.env.YT_COOKIES;
+
+    const args = [url, '-f', 'bestaudio', '-o', '-', '--no-playlist'];
+    if (cookiesStr) {
+        if (!cookiesStr.includes('\t') && !cookiesStr.startsWith('#')) {
+            args.push('--add-header', `Cookie:${cookiesStr}`);
+        }
+    }
+
+    const ytdl = spawn(binPath, args);
+    return ytdl.stdout;
+};
+
 exports.getVideoInfo = async (url) => {
     const isWindows = process.platform === 'win32';
     const binPath = path.join(BIN_DIR, isWindows ? 'yt-dlp.exe' : 'yt-dlp');
@@ -198,4 +219,4 @@ exports.getVideoInfo = async (url) => {
             else reject(new Error(`Exit code ${code}`));
         });
     });
-}
+};

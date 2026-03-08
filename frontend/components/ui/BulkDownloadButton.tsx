@@ -26,17 +26,8 @@ export default function BulkDownloadButton({ selectedSongs, onDownloadComplete }
             const songsPayload = selectedSongs.map(song => ({
                 title: song.title,
                 artist: song.artist.name,
-                // Use the download/stream endpoint logic URL or preview if available
-                // For demonstration, we'll construct the download URL similar to single download
-                // NOTE: In production, backend should resolve streams internally if needed
-                downloadUrl: `${BASE_API_URL}/songs/download?url=${encodeURIComponent(song.link)}&title=${encodeURIComponent(song.title)}&artist=${encodeURIComponent(song.artist.name)}`
+                downloadUrl: song.link || song.preview || ""
             }));
-
-            // In our backend implementation, we are streaming from URLs. 
-            // However, our backend 'download' endpoint is a stream itself. 
-            // So we are effectively chaining streams. This works but is heavy.
-            // Ideally, the backend bulk downloader should use the resolving logic internally.
-            // But for now, we pass the "downloadUrl" which points to our own server's single download endpoint.
 
             const response = await fetch(`${BASE_API_URL}/download/bulk`, {
                 method: "POST",
