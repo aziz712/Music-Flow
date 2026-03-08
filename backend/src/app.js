@@ -15,8 +15,30 @@ const { errorHandler } = require('./middlewares/error.middleware');
 const app = express();
 
 // Middlewares
-app.use(cors());
-app.use(securityMiddleware); // Custom hardened security & CSP
+const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:5000',
+    'https://music-flow-aziz712s-projects.vercel.app',
+    'https://music-flow.vercel.app'
+];
+
+app.use(cors({
+    origin: function (origin, callback) {
+        // allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.indexOf(origin) === -1) {
+            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+            return callback(new Error(msg), false);
+        }
+        return callback(null, true);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
+}));
+
+// Basic security middleware, but we ensure it doesn't break streaming
+app.use(securityMiddleware);
 app.use(express.json());
 
 // Optimized Cache-Control Middleware

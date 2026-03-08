@@ -4,6 +4,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { PassThrough } = require('stream');
 const fs = require('fs');
+const https = require('https');
 
 // Simple in-memory cache for stream URLs to avoid re-spawning yt-dlp
 const urlCache = new Map();
@@ -38,13 +39,13 @@ exports.search = async (query) => {
     }
 };
 
-exports.streamProxy = (url, res) => {
+exports.streamProxy = (url, res, req) => {
     const isWindows = process.platform === 'win32';
     const binPath = path.join(BIN_DIR, isWindows ? 'yt-dlp.exe' : 'yt-dlp');
     // Check Cache
     const cached = urlCache.get(url);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-        pipeTranscodedAudio(cached.url, res);
+        pipeNativeAudio(cached.url, req, res);
         return;
     }
 
@@ -56,12 +57,20 @@ exports.streamProxy = (url, res) => {
     const args = [
         url,
         '-g',
-        '-f', 'bestaudio',
-        '--extractor-args', `youtube:player-client=ios,web,mweb${poToken ? `;po_token=${poToken}` : ''}`,
+        '-f', 'bestaudio', // Let yt-dlp pick the best available format (webm or m4a)
         '--geo-bypass',
-        '--no-playlist',
-        '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        '--no-playlist'
     ];
+
+    if (poToken) {
+        args.push('--extractor-args', `youtube:player-client=ios,web,mweb;po_token=${poToken}`);
+    } else {
+        // Leave empty: Use default client rotation if no poToken is provided to prevent aggressive blocking.
+        // Forcing web,mweb here explicitly causes bot-blocks.
+    }
+
+    // Add generic user agent
+    args.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
     // If cookies are provided in env, we apply them
     if (cookiesStr) {
@@ -119,59 +128,61 @@ exports.streamProxy = (url, res) => {
             return;
         }
 
+        console.log(`Successfully extracted URL for ${url.substring(0, 30)}...`);
         urlCache.set(url, { url: cleanUrl, timestamp: Date.now() });
-        pipeTranscodedAudio(cleanUrl, res);
+        pipeNativeAudio(cleanUrl, req, res);
     });
 };
 
-const pipeTranscodedAudio = (targetUrl, expressRes) => {
-    expressRes.setHeader('Content-Type', 'audio/mpeg');
-    expressRes.setHeader('Transfer-Encoding', 'chunked');
-    expressRes.setHeader('Cache-Control', 'no-cache');
-    expressRes.setHeader('Access-Control-Allow-Origin', '*');
-    expressRes.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-    expressRes.setHeader('Accept-Ranges', 'bytes');
+const pipeNativeAudio = (targetUrl, expressReq, expressRes) => {
+    const urlObj = new URL(targetUrl);
 
-    const ffmpegPath = 'ffmpeg';
+    const options = {
+        hostname: urlObj.hostname,
+        path: urlObj.pathname + urlObj.search,
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        }
+    };
 
-    try {
-        const ffmpegProcess = spawn(ffmpegPath, [
-            '-reconnect', '1',
-            '-reconnect_streamed', '1',
-            '-reconnect_delay_max', '5',
-            '-i', targetUrl,
-            '-f', 'mp3',
-            '-acodec', 'libmp3lame',
-            '-ab', '128k',
-            '-ar', '44100',
-            '-map', 'a',
-            'pipe:1'
-        ]);
+    // Forward the Range header to YouTube for seeking support
+    if (expressReq && expressReq.headers.range) {
+        options.headers['Range'] = expressReq.headers.range;
+    }
 
-        ffmpegProcess.stdout.pipe(expressRes);
+    const request = https.get(options, (response) => {
+        // Forward HTTP status (could be 200 OK or 206 Partial Content)
+        expressRes.status(response.statusCode);
 
-        ffmpegProcess.on('error', (err) => {
-            console.error("FFmpeg failed to start:", err.message);
+        const headers = { ...response.headers };
+
+        // Critical headers for mobile browsers and audio elements
+        headers['Content-Type'] = response.headers['content-type'] || 'audio/mp4';
+        headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+        headers['Pragma'] = 'no-cache';
+        headers['Expires'] = '0';
+        headers['Access-Control-Allow-Origin'] = '*';
+        headers['Cross-Origin-Resource-Policy'] = 'cross-origin';
+        headers['Accept-Ranges'] = 'bytes';
+        headers['Connection'] = 'keep-alive';
+
+        expressRes.set(headers);
+
+        // Pipe directly to client! Huge CPU save!
+        response.pipe(expressRes);
+    });
+
+    request.on('error', (err) => {
+        console.error("Native pipe error:", err.message);
+        if (!expressRes.headersSent) {
+            expressRes.status(500).send("Streaming error");
+        }
+    });
+
+    if (expressReq) {
+        expressReq.on('close', () => {
+            request.destroy(); // Stop fetching if client disconnects
         });
-
-        ffmpegProcess.stderr.on('data', (data) => {
-            if (data.toString().includes('Error')) {
-                console.error(`FFmpeg Error: ${data}`);
-            }
-        });
-
-        ffmpegProcess.on('close', (code) => {
-            if (code !== 0 && code !== null) {
-                console.error(`FFmpeg process failed with code ${code} for target: ${targetUrl.substring(0, 100)}...`);
-                // We can't really fallback here as headers are usually sent
-            }
-        });
-
-        expressRes.on('close', () => {
-            ffmpegProcess.kill('SIGKILL');
-        });
-    } catch (e) {
-        console.error("Critical FFmpeg spawn error:", e.message);
     }
 };
 
