@@ -63,16 +63,22 @@ exports.streamProxy = (url, res) => {
         '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     ];
 
-    // If cookies are provided in env, write them to a temp file for yt-dlp to read
+    // If cookies are provided in env, we apply them
     if (cookiesStr) {
-        try {
-            // Netscape format requires a specific header if not present
-            const formattedCookies = cookiesStr.startsWith('#') ? cookiesStr : `# Netscape HTTP Cookie File\n${cookiesStr}`;
-            fs.writeFileSync(cookiesPath, formattedCookies);
-            args.push('--cookies', cookiesPath);
-            console.log("Using provided YouTube cookies for extraction.");
-        } catch (err) {
-            console.error("Failed to write YouTube cookies to temp file:", err.message);
+        if (cookiesStr.includes('\t') || cookiesStr.startsWith('#')) {
+            // Likely a Netscape file content
+            try {
+                const formattedCookies = cookiesStr.startsWith('#') ? cookiesStr : `# Netscape HTTP Cookie File\n${cookiesStr}`;
+                fs.writeFileSync(cookiesPath, formattedCookies);
+                args.push('--cookies', cookiesPath);
+                console.log("Using provided YouTube cookies (Netscape format).");
+            } catch (err) {
+                console.error("Failed to write YouTube cookies to temp file:", err.message);
+            }
+        } else {
+            // Likely a raw cookie header string (e.g. GPS=1; YSC=...)
+            args.push('--add-header', `Cookie:${cookiesStr}`);
+            console.log("Using provided YouTube cookies (Raw Header format).");
         }
     }
 
