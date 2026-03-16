@@ -231,7 +231,7 @@ exports.recordInteraction = async (req, res, next) => {
             id: songId,
             title: metadata?.title || 'Unknown',
             artist: metadata?.artist || 'Unknown',
-            metadata: { album_art: metadata?.image, ...metadata }
+            metadata: { album_art: metadata?.image, ...metadata, duration: duration || metadata?.duration }
         });
 
         if (userId && (action === 'play' || action === 'like')) {

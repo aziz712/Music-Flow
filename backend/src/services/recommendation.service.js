@@ -111,6 +111,7 @@ exports.getHybridRecommendations = async (userId) => {
             artist: { name: s.artist },
             image: s.metadata?.album_art || `https://img.youtube.com/vi/${s.id}/0.jpg`,
             link: `https://www.youtube.com/watch?v=${s.id}`,
+            duration: s.metadata?.duration || 0,
             reason: s.reason,
             score: s.score
         }));
