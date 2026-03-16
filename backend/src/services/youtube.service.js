@@ -5,6 +5,15 @@ const { spawn } = require('child_process');
 const { PassThrough } = require('stream');
 const fs = require('fs');
 const https = require('https');
+const { Innertube } = require('youtubei.js');
+
+let innerTube;
+const getInnerTube = async () => {
+    if (!innerTube) {
+        innerTube = await Innertube.create();
+    }
+    return innerTube;
+};
 
 // Simple in-memory cache for stream URLs to avoid re-spawning yt-dlp
 const urlCache = new Map();
@@ -62,11 +71,14 @@ exports.streamProxy = (url, res, req, isDownload = false) => {
         '--no-playlist'
     ];
 
-    if (poToken) {
+    if (!isWindows) {
+        // PRODUCTION (Render/Linux): Use only ios/android clients which are more resilient to bot blocks on cloud IPs.
+        // We remove 'web,mweb' here as they are the primary source of 'Sign in to confirm you are not a bot'.
+        args.push('--extractor-args', `youtube:player-client=ios,android${poToken ? `;po_token=${poToken}` : ''}`);
+        // Prefer m4a for better browser compatibility
+        args[args.indexOf('-f') + 1] = 'bestaudio[ext=m4a]/bestaudio/best';
+    } else if (poToken) {
         args.push('--extractor-args', `youtube:player-client=ios,web,mweb;po_token=${poToken}`);
-    } else {
-        // Leave empty: Use default client rotation if no poToken is provided to prevent aggressive blocking.
-        // Forcing web,mweb here explicitly causes bot-blocks.
     }
 
     // Add generic user agent
@@ -113,11 +125,32 @@ exports.streamProxy = (url, res, req, isDownload = false) => {
 
     ytdl.on('close', (code) => {
         if (code !== 0) {
-            console.error(`yt-dlp failed with code ${code} for URL: ${url}`);
-            if (!res.headersSent) res.status(500).json({
-                error: "Extraction Failed",
-                code: code,
-                details: "YouTube is blocking the request. Try another song or search directly."
+            console.error(`yt-dlp failed with code ${code} for URL: ${url}. Attempting youtubei.js fallback...`);
+
+            // FALLBACK: Use youtubei.js (InnerTube) if yt-dlp is blocked
+            getInnerTube().then(async (yt) => {
+                try {
+                    const videoId = url.includes('v=') ? url.split('v=')[1].split('&')[0] : url.split('/').pop();
+                    const info = await yt.getBasicInfo(videoId);
+                    const format = info.chooseFormat({ type: 'audio', quality: 'best' });
+
+                    if (format && format.url) {
+                        console.log(`Fallback success: Extracted URL via InnerTube for ${videoId}`);
+                        urlCache.set(url, { url: format.url, timestamp: Date.now() });
+                        pipeNativeAudio(format.url, req, res, isDownload);
+                    } else {
+                        throw new Error("No format found via fallback");
+                    }
+                } catch (fallbackErr) {
+                    console.error("Fallback extraction also failed:", fallbackErr.message);
+                    if (!res.headersSent) res.status(500).json({
+                        error: "Extraction Failed",
+                        details: "YouTube is blocking both standard and fallback extraction. Try again later."
+                    });
+                }
+            }).catch(innerTubeErr => {
+                console.error("InnerTube initialization failed:", innerTubeErr.message);
+                if (!res.headersSent) res.status(500).send("Extraction engine error");
             });
             return;
         }
