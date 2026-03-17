@@ -8,8 +8,8 @@ const https = require('https');
 const { Innertube, UniversalCache } = require('youtubei.js');
 
 // These are session-bound tokens to bypass "Sign in to confirm you're not a bot"
-const DEFAULT_VISITOR_DATA = "Cgt4OTl5elhPNUlvOCi81uLNBjIKCgJUThIEGgAgQmLfAgrcAjE2LllUPVgwM1plSGpzNjZybHo2SEwwUVU4Q3dzMzZLUTJuZC1fN0t1N0ViMkNNZ3M5b3djeDhWUjZaVnNQcE9TUnJvZzN2eXV4MXRjQXBsdllFSWpwVktBRjJoanJhZmtPeDBjdE5TX0Z0eDJWSzFGaVlXNlRON01IcUFQNGQ0dzJfY1NYSVJ4X1ZTNFFqdHBhbkRhNVRQVDhIOHVrUTVkMW9tV3RYNVVHVjk4TDdMbFEwWHhJVHJZeTY2aGlSZm1hTm5aZlNNTE9ZWDVVZEZqRWJ4aXB4bmtiVGdVQlFTSVdSZU01VmNlTkY5N0hZSmNKN2M3WEk1SHR4cDB3QVhhdEdfNTQ5Y1hkRVRlaVYyRXFQQmNlblIxaHp2UlQ4SXViSzZndFh1Qk5ZbnJvVFhyTFVyVFZ4OWo3UDYxTUxqV3o3Y0JUUUptcFJWbERkUnV1UHhtZTJURzdrZw==";
-const DEFAULT_PO_TOKEN = "MlOf4yezUFrFl5_f5as_wcRchC9EzFrz4JZznIR1zACbNAxBWBtAZJUk1-GqkFXjy5KYxt8YFLugonHJV3rRgzqLZuBOyIH6XgxL2j4Zl4BWMwAPAw==";
+const DEFAULT_VISITOR_DATA = "Cgt4OTl5elhPNUlvOCj35OLNBjIKCgJUThIEGgAgQmLfAgrcAjE2LllUPVgwM1plSGpzNjZybHo2SEwwUVU4Q3dzMzZLUTJuZC1fN0t1N0ViMkNNZ3M5b3djeDhWUjZaVnNQcE9TUnJvZzN2eXV4MXRjQXBsdllFSWpwVktBRjJoanJhZmtPeDBjdE5TX0Z0eDJWSzFGaVlXNlRON01IcUFQNGQ0dzJfY1NYSVJ4X1ZTNFFqdHBhbkRhNVRQVDhIOHVrUTVkMW9tV3RYNVVHVjk4TDdMbFEwWHhJVHJZeTY2aGlSZm1hTm5aZlNNTE9ZWDVVZEZqRWJ4aXB4bmtiVGdVQlFTSVdSZU01VmNlTkY5N0hZSmNKN2M3WEk1SHR4cDB3QVhhdEdfNTQ5Y1hkRVRlaVYyRXFQQmNlblIxaHp2UlQ4SXViSzZndFh1Qk5ZbnJvVFhyTFVyVFZ4OWo3UDYxTUxqV3o3Y0JUUUptcFJWbERkUnV1UHhtZTJURzdrZw==";
+const DEFAULT_PO_TOKEN = "MlPqnxyOzHXoIuqj6Qex64MEVyXhXuFFfUFc7SqXGMJb0Xy9z-yj1V1RtWyB6ziKsLxxQ9eOXPCV8pFoOS-jEAZwFxuxhRR8-juK0IyJGV1B9yBYuQ==";
 
 // Production-Grade Extraction Queue to prevent HTTP 429
 class ExtractionQueue {
@@ -49,13 +49,12 @@ class ExtractionQueue {
 const extractionQueue = new ExtractionQueue(1); // Single-threaded extraction for cloud IPs
 
 let innerTube;
-const getInnerTube = async (client = 'WEB') => {
+const getInnerTube = async () => {
     const isWindows = process.platform === 'win32';
     const options = {
         cache: new UniversalCache(false),
         generate_session_locally: true,
-        // Prioritize TV and Mobile clients for lower challenge rates
-        client_type: client,
+        retrieve_player: true,
         lang: 'en',
         location: 'US'
     };
@@ -68,12 +67,12 @@ const getInnerTube = async (client = 'WEB') => {
     if (visitorData) options.visitor_data = visitorData;
 
     // Use a persistent cache for the WEB client to speed up search/initial loads
-    if (client === 'WEB' && !isWindows) {
+    if (!isWindows) {
         options.cache = new UniversalCache(true);
     }
 
     const yt = await Innertube.create(options);
-    if (client === 'WEB') innerTube = yt;
+    innerTube = yt;
     return yt;
 };
 
@@ -161,22 +160,19 @@ exports.streamProxy = (url, res, req, isDownload = false) => {
 
                 if (!isWindows) {
                     const contexts = ['web.player', 'web.gvs', 'android.player', 'android.gvs', 'ios.player', 'ios.gvs', 'tv.player', 'tv.gvs'];
+                    // Apply PoToken to all relevant contexts
                     const formattedPo = poToken ? contexts.map(ctx => `${ctx}+${poToken}`).join(',') : '';
                     spawnArgs.push('--extractor-args', `youtube:player-client=tvhtml5,ios,android,web${formattedPo ? `;po_token=${formattedPo}` : ''}${visitorData ? `;visitor_data=${visitorData}` : ''}`);
                     spawnArgs[spawnArgs.indexOf('-f') + 1] = 'bestaudio[ext=m4a]/bestaudio/best';
                 } else {
                     if (poToken || visitorData) {
-                        let extractorArgs = `youtube:player-client=ios,web,mweb`;
-                        if (poToken) extractorArgs += `;po_token=${poToken}`;
-                        if (visitorData) extractorArgs += `;visitor_data=${visitorData}`;
-                        spawnArgs.push('--extractor-args', extractorArgs);
+                        spawnArgs.push('--extractor-args', `youtube:player-client=ios,web,mweb${poToken ? `;po_token=${poToken}` : ''}${visitorData ? `;visitor_data=${visitorData}` : ''}`);
                     }
                 }
 
                 spawnArgs.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
 
                 if (useCookies && cookiesStr) {
-                    // Prepare cookies file
                     try {
                         const formattedCookies = (cookiesStr.includes('\t') || cookiesStr.startsWith('#'))
                             ? (cookiesStr.startsWith('#') ? cookiesStr : `# Netscape HTTP Cookie File\n${cookiesStr}`)
@@ -198,10 +194,8 @@ exports.streamProxy = (url, res, req, isDownload = false) => {
 
                 ytdl.stdout.on('data', (d) => audioUrl += d.toString());
                 ytdl.stderr.on('data', (d) => {
-                    const stderrStr = d.toString();
-                    if (stderrStr.includes('ERROR') || stderrStr.includes('Warning')) {
-                        console.error(`yt-dlp stderr: ${stderrStr}`);
-                    }
+                    const str = d.toString();
+                    if (str.includes('ERROR') || str.includes('Warning')) console.error(`yt-dlp stderr: ${str}`);
                 });
 
                 ytdl.on('close', (code) => {
@@ -210,7 +204,7 @@ exports.streamProxy = (url, res, req, isDownload = false) => {
             });
         };
 
-        // PHASE 2 FLOW: Primary (Cookies) -> Secondary (Guest Mode) -> Fallback (InnerTube)
+        // PHASE 2.1 FLOW: Primary (Cookies) -> Secondary (Guest Mode) -> Fallback (InnerTube Rotation)
         let result = await attemptExtraction(true);
 
         if (result.code !== 0 && cookiesStr) {
@@ -219,17 +213,19 @@ exports.streamProxy = (url, res, req, isDownload = false) => {
         }
 
         if (result.code !== 0) {
-            console.error(`yt-dlp definitively failed for ${url}. Attempting youtubei.js rotation...`);
+            console.error(`yt-dlp definitively failed for ${url}. Attempting InnerTube rotation...`);
 
             const performFallback = async () => {
-                const clients = ['TVHTML5', 'IOS', 'ANDROID', 'YTMUSIC', 'WEB'];
+                // Corrected client names and options for InnerTube v17
+                const clients = ['TVHTML5', 'ANDROID', 'IOS', 'WEB'];
                 for (const clientName of clients) {
                     try {
                         console.log(`Fallback attempt using ${clientName} client...`);
-                        const yt = await getInnerTube(clientName);
+                        const yt = await getInnerTube();
                         const videoId = url.includes('v=') ? url.split('v=')[1].split('&')[0] : url.split('/').pop();
 
-                        const info = await yt.getBasicInfo(videoId, clientName);
+                        // Pass client as an option object correctly
+                        const info = await yt.getBasicInfo(videoId, { client: clientName });
                         const format = info.chooseFormat({ type: 'audio', quality: 'best' });
 
                         if (format && format.url) {
@@ -247,7 +243,7 @@ exports.streamProxy = (url, res, req, isDownload = false) => {
 
             const success = await performFallback();
             if (!success && !res.headersSent) {
-                res.status(500).json({ error: "YouTube Extraction Failed", details: "All bypass methods exhausted (Phase 2)." });
+                res.status(500).json({ error: "YouTube Extraction Failed", details: "All bypass methods exhausted (Phase 2.1)." });
             }
             return;
         }
