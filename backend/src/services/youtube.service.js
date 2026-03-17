@@ -12,8 +12,8 @@ const DEFAULT_VISITOR_DATA = "Cgt4OTl5elhPNUlvOCiXvuLNBjIKCgJUThIEGgAgQmLfAgrcAj
 const DEFAULT_PO_TOKEN = "Mlgg2-pXeGjF2yCaQ0lm-m3oPrELTcPnp6MphPi79bWrb4zYOrq7XFZMoT9Xviuzul22ibhU9QuNcCjV9pAI3w1V3M9x2z2pKiXWbhzH6jOWE1S1zC7O8siX";
 
 let innerTube;
-const getInnerTube = async () => {
-    if (!innerTube) {
+const getInnerTube = async (client = 'WEB') => {
+    if (!innerTube || client !== 'WEB') {
         const isWindows = process.platform === 'win32';
         const options = {
             cache: new UniversalCache(false),
@@ -30,10 +30,22 @@ const getInnerTube = async () => {
             if (!options.po_token) options.po_token = DEFAULT_PO_TOKEN;
         }
 
-        innerTube = await Innertube.create(options);
+        const yt = await Innertube.create(options);
+        if (client === 'WEB') innerTube = yt;
+        return yt;
     }
     return innerTube;
 };
+
+// Ensure yt-dlp is updated on startup (Production only)
+if (process.platform === 'linux') {
+    const isWindows = process.platform === 'win32';
+    const binPath = path.join(BIN_DIR, isWindows ? 'yt-dlp.exe' : 'yt-dlp');
+    console.log("Checking for yt-dlp updates...");
+    const updater = spawn(binPath, ['-U']);
+    updater.stdout.on('data', (d) => console.log(`yt-dlp-update: ${d}`));
+    updater.stderr.on('data', (d) => console.warn(`yt-dlp-update-err: ${d}`));
+}
 
 // Simple in-memory cache for stream URLs to avoid re-spawning yt-dlp
 const urlCache = new Map();
@@ -100,8 +112,10 @@ exports.streamProxy = (url, res, req, isDownload = false) => {
     ];
 
     if (!isWindows) {
-        // PRODUCTION (Render/Linux): Use only ios/android clients which are more resilient to bot blocks on cloud IPs.
-        args.push('--extractor-args', `youtube:player-client=ios,android${poToken ? `;po_token=${poToken}` : ''}${visitorData ? `;visitor_data=${visitorData}` : ''}`);
+        // PRODUCTION (Render/Linux): Use robust clients and correctly formatted tokens
+        // yt-dlp expects "CLIENT.CONTEXT+TOKEN" for po_token
+        const formattedPo = poToken ? `web.player+${poToken},web.gvs+${poToken}` : '';
+        args.push('--extractor-args', `youtube:player-client=ios,android,web${formattedPo ? `;po_token=${formattedPo}` : ''}${visitorData ? `;visitor_data=${visitorData}` : ''}`);
         // Prefer m4a for better browser compatibility
         args[args.indexOf('-f') + 1] = 'bestaudio[ext=m4a]/bestaudio/best';
     } else {
@@ -160,33 +174,41 @@ exports.streamProxy = (url, res, req, isDownload = false) => {
         if (code !== 0) {
             console.error(`yt-dlp failed with code ${code} for URL: ${url}. Attempting youtubei.js fallback...`);
 
-            // FALLBACK: Use youtubei.js (InnerTube) if yt-dlp is blocked
-            getInnerTube().then(async (yt) => {
-                try {
-                    const videoId = url.includes('v=') ? url.split('v=')[1].split('&')[0] : url.split('/').pop();
-                    const info = await yt.getBasicInfo(videoId);
-                    const format = info.chooseFormat({ type: 'audio', quality: 'best' });
+            // FALLBACK: Use youtubei.js (InnerTube) with client rotation if yt-dlp is blocked
+            const performFallback = async () => {
+                const clients = ['ANDROID', 'TV', 'WEB'];
+                for (const clientName of clients) {
+                    try {
+                        console.log(`Fallback attempt using ${clientName} client...`);
+                        const yt = await getInnerTube(clientName);
+                        const videoId = url.includes('v=') ? url.split('v=')[1].split('&')[0] : url.split('/').pop();
+                        const info = await yt.getBasicInfo(videoId, clientName);
+                        const format = info.chooseFormat({ type: 'audio', quality: 'best' });
 
-                    if (format && format.url) {
-                        console.log(`Fallback success: Extracted URL via InnerTube for ${videoId}`);
-                        urlCache.set(url, { url: format.url, timestamp: Date.now() });
-                        pipeNativeAudio(format.url, req, res, isDownload);
-                    } else {
-                        throw new Error("No format found via fallback");
+                        if (format && format.url) {
+                            console.log(`Fallback success: Extracted URL via InnerTube (${clientName}) for ${videoId}`);
+                            urlCache.set(url, { url: format.url, timestamp: Date.now() });
+                            pipeNativeAudio(format.url, req, res, isDownload);
+                            return true;
+                        }
+                    } catch (err) {
+                        console.warn(`${clientName} fallback failed:`, err.message);
                     }
-                } catch (fallbackErr) {
-                    console.error("Fallback extraction also failed:", fallbackErr.message);
-                    if (!res.headersSent) res.status(500).json({
+                }
+                return false;
+            };
+
+            performFallback().then(success => {
+                if (!success && !res.headersSent) {
+                    res.status(500).json({
                         error: "Extraction Failed",
-                        details: "YouTube is blocking both standard and fallback extraction. Try again later."
+                        details: "YouTube is blocking all extraction methods. Try again later."
                     });
                 }
-            }).catch(innerTubeErr => {
-                console.error("InnerTube initialization failed:", innerTubeErr.message);
-                if (!res.headersSent) res.status(500).send("Extraction engine error");
             });
             return;
         }
+
         const cleanUrl = audioUrl.trim();
         if (!cleanUrl) {
             console.error("No YouTube audio URL extracted");
