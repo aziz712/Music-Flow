@@ -68,7 +68,8 @@ exports.streamProxy = (url, res, req, isDownload = false) => {
     }
 
     const cookiesStr = process.env.YT_COOKIES;
-    const poToken = process.env.YT_PO_TOKEN;
+    const poToken = process.env.YT_PO_TOKEN || DEFAULT_PO_TOKEN;
+    const visitorData = process.env.YT_VISITOR_DATA || DEFAULT_VISITOR_DATA;
     const cookiesPath = path.join(process.platform === 'win32' ? process.env.TEMP || 'C:\\Windows\\Temp' : '/tmp', 'yt_cookies.txt');
 
     // Use multiple clients and geo-bypass to reduce bot detection
@@ -82,12 +83,12 @@ exports.streamProxy = (url, res, req, isDownload = false) => {
 
     if (!isWindows) {
         // PRODUCTION (Render/Linux): Use only ios/android clients which are more resilient to bot blocks on cloud IPs.
-        // We remove 'web,mweb' here as they are the primary source of 'Sign in to confirm you are not a bot'.
-        args.push('--extractor-args', `youtube:player-client=ios,android${poToken ? `;po_token=${poToken}` : ''}`);
+        args.push('--extractor-args', `youtube:player-client=ios,android;po_token=${poToken};visitor_data=${visitorData}`);
         // Prefer m4a for better browser compatibility
         args[args.indexOf('-f') + 1] = 'bestaudio[ext=m4a]/bestaudio/best';
-    } else if (poToken) {
-        args.push('--extractor-args', `youtube:player-client=ios,web,mweb;po_token=${poToken}`);
+    } else {
+        // WINDOWS (Local): Keep web,mweb for better quality but use tokens if provided
+        args.push('--extractor-args', `youtube:player-client=ios,web,mweb;po_token=${poToken};visitor_data=${visitorData}`);
     }
 
     // Add generic user agent
