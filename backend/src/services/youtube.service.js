@@ -14,12 +14,23 @@ const DEFAULT_PO_TOKEN = "Mlgg2-pXeGjF2yCaQ0lm-m3oPrELTcPnp6MphPi79bWrb4zYOrq7XF
 let innerTube;
 const getInnerTube = async () => {
     if (!innerTube) {
-        innerTube = await Innertube.create({
+        const isWindows = process.platform === 'win32';
+        const options = {
             cache: new UniversalCache(false),
-            generate_session_locally: true,
-            visitor_data: process.env.YT_VISITOR_DATA || DEFAULT_VISITOR_DATA,
-            po_token: process.env.YT_PO_TOKEN || DEFAULT_PO_TOKEN
-        });
+            generate_session_locally: true
+        };
+
+        // Use tokens if provided in env
+        if (process.env.YT_VISITOR_DATA) options.visitor_data = process.env.YT_VISITOR_DATA;
+        if (process.env.YT_PO_TOKEN) options.po_token = process.env.YT_PO_TOKEN;
+
+        // Fallback to defaults ONLY in production if not provided specifically
+        if (!isWindows) {
+            if (!options.visitor_data) options.visitor_data = DEFAULT_VISITOR_DATA;
+            if (!options.po_token) options.po_token = DEFAULT_PO_TOKEN;
+        }
+
+        innerTube = await Innertube.create(options);
     }
     return innerTube;
 };
@@ -68,8 +79,15 @@ exports.streamProxy = (url, res, req, isDownload = false) => {
     }
 
     const cookiesStr = process.env.YT_COOKIES;
-    const poToken = process.env.YT_PO_TOKEN || DEFAULT_PO_TOKEN;
-    const visitorData = process.env.YT_VISITOR_DATA || DEFAULT_VISITOR_DATA;
+    let poToken = process.env.YT_PO_TOKEN;
+    let visitorData = process.env.YT_VISITOR_DATA;
+
+    // Fallback to defaults ONLY in production if not provided in env
+    if (!isWindows) {
+        if (!poToken) poToken = DEFAULT_PO_TOKEN;
+        if (!visitorData) visitorData = DEFAULT_VISITOR_DATA;
+    }
+
     const cookiesPath = path.join(process.platform === 'win32' ? process.env.TEMP || 'C:\\Windows\\Temp' : '/tmp', 'yt_cookies.txt');
 
     // Use multiple clients and geo-bypass to reduce bot detection
@@ -83,12 +101,17 @@ exports.streamProxy = (url, res, req, isDownload = false) => {
 
     if (!isWindows) {
         // PRODUCTION (Render/Linux): Use only ios/android clients which are more resilient to bot blocks on cloud IPs.
-        args.push('--extractor-args', `youtube:player-client=ios,android;po_token=${poToken};visitor_data=${visitorData}`);
+        args.push('--extractor-args', `youtube:player-client=ios,android${poToken ? `;po_token=${poToken}` : ''}${visitorData ? `;visitor_data=${visitorData}` : ''}`);
         // Prefer m4a for better browser compatibility
         args[args.indexOf('-f') + 1] = 'bestaudio[ext=m4a]/bestaudio/best';
     } else {
-        // WINDOWS (Local): Keep web,mweb for better quality but use tokens if provided
-        args.push('--extractor-args', `youtube:player-client=ios,web,mweb;po_token=${poToken};visitor_data=${visitorData}`);
+        // WINDOWS (Local): Keep it simple. Only add extractor-args if tokens are explicitly provided.
+        if (poToken || visitorData) {
+            let extractorArgs = `youtube:player-client=ios,web,mweb`;
+            if (poToken) extractorArgs += `;po_token=${poToken}`;
+            if (visitorData) extractorArgs += `;visitor_data=${visitorData}`;
+            args.push('--extractor-args', extractorArgs);
+        }
     }
 
     // Add generic user agent
