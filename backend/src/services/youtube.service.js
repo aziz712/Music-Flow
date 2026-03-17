@@ -50,35 +50,36 @@ const extractionQueue = new ExtractionQueue(1); // Single-threaded extraction fo
 
 let innerTube;
 const getInnerTube = async (client = 'WEB') => {
-    if (!innerTube || client !== 'WEB') {
-        const isWindows = process.platform === 'win32';
-        const options = {
-            cache: new UniversalCache(false),
-            generate_session_locally: true
-        };
+    const isWindows = process.platform === 'win32';
+    const options = {
+        cache: new UniversalCache(false),
+        generate_session_locally: true,
+        // Prioritize TV and Mobile clients for lower challenge rates
+        client_type: client,
+        lang: 'en',
+        location: 'US'
+    };
 
-        // Use tokens if provided in env
-        if (process.env.YT_VISITOR_DATA) options.visitor_data = process.env.YT_VISITOR_DATA;
-        if (process.env.YT_PO_TOKEN) options.po_token = process.env.YT_PO_TOKEN;
+    // Use tokens if provided in env
+    let poToken = process.env.YT_PO_TOKEN || DEFAULT_PO_TOKEN;
+    let visitorData = process.env.YT_VISITOR_DATA || DEFAULT_VISITOR_DATA;
 
-        // Fallback to defaults ONLY in production if not provided specifically
-        if (!isWindows) {
-            if (!options.visitor_data) options.visitor_data = DEFAULT_VISITOR_DATA;
-            if (!options.po_token) options.po_token = DEFAULT_PO_TOKEN;
-        }
+    if (poToken) options.po_token = poToken;
+    if (visitorData) options.visitor_data = visitorData;
 
-        const yt = await Innertube.create(options);
-        if (client === 'WEB') innerTube = yt;
-        return yt;
+    // Use a persistent cache for the WEB client to speed up search/initial loads
+    if (client === 'WEB' && !isWindows) {
+        options.cache = new UniversalCache(true);
     }
-    return innerTube;
+
+    const yt = await Innertube.create(options);
+    if (client === 'WEB') innerTube = yt;
+    return yt;
 };
 
-// Ensure yt-dlp is updated on startup (Production only)
 // Ensure yt-dlp is updated on startup (Local only - avoid rate limits in production startup)
 if (process.platform === 'win32') {
-    const isWindows = process.platform === 'win32';
-    const binPath = path.join(BIN_DIR, isWindows ? 'yt-dlp.exe' : 'yt-dlp');
+    const binPath = path.join(BIN_DIR, 'yt-dlp.exe');
     console.log("Checking for yt-dlp updates...");
     const updater = spawn(binPath, ['-U']);
     updater.stdout.on('data', (d) => console.log(`yt-dlp-update: ${d}`));
@@ -97,9 +98,7 @@ exports.search = async (query) => {
         return videos.map(video => ({
             id: video.videoId,
             title: video.title,
-            artist: {
-                name: video.author?.name || 'Unknown Artist'
-            },
+            artist: { name: video.author?.name || 'Unknown Artist' },
             album: {
                 title: "YouTube",
                 cover_small: video.thumbnail || video.thumbnails?.[0]?.url || '',
@@ -121,6 +120,7 @@ exports.search = async (query) => {
 exports.streamProxy = (url, res, req, isDownload = false) => {
     const isWindows = process.platform === 'win32';
     const binPath = path.join(BIN_DIR, isWindows ? 'yt-dlp.exe' : 'yt-dlp');
+
     // Check Cache
     const cached = urlCache.get(url);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
@@ -129,15 +129,8 @@ exports.streamProxy = (url, res, req, isDownload = false) => {
     }
 
     const cookiesStr = process.env.YT_COOKIES;
-    let poToken = process.env.YT_PO_TOKEN;
-    let visitorData = process.env.YT_VISITOR_DATA;
-
-    // Fallback to defaults ONLY in production if not provided in env
-    if (!isWindows) {
-        if (!poToken) poToken = DEFAULT_PO_TOKEN;
-        if (!visitorData) visitorData = DEFAULT_VISITOR_DATA;
-    }
-
+    let poToken = process.env.YT_PO_TOKEN || DEFAULT_PO_TOKEN;
+    let visitorData = process.env.YT_VISITOR_DATA || DEFAULT_VISITOR_DATA;
     const cookiesPath = path.join(process.platform === 'win32' ? process.env.TEMP || 'C:\\Windows\\Temp' : '/tmp', 'yt_cookies.txt');
 
     // QUEUED TASK: Wrap extraction in the queue to prevent 429s
@@ -149,157 +142,125 @@ exports.streamProxy = (url, res, req, isDownload = false) => {
             return;
         }
 
-        console.log(`Initiatin extraction for: ${url} (Concurrency: ${extractionQueue.running})`);
+        const attemptExtraction = (useCookies = true) => {
+            return new Promise((resolve) => {
+                // Use multiple clients and geo-bypass to reduce bot detection
+                const spawnArgs = [
+                    url,
+                    '-g',
+                    '-f', 'bestaudio',
+                    '--geo-bypass',
+                    '--no-playlist',
+                    '--sleep-interval', '2',
+                    '--max-sleep-interval', '5',
+                    '--force-ipv4', // Bypass flagged IPv6 ranges on Render
+                    '--add-header', 'sec-ch-ua:"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+                    '--add-header', 'sec-ch-ua-mobile:?0',
+                    '--add-header', 'sec-ch-ua-platform:"Windows"'
+                ];
 
-        // Use multiple clients and geo-bypass to reduce bot detection
-        const args = [
-            url,
-            '-g',
-            '-f', 'bestaudio', // Let yt-dlp pick the best available format (webm or m4a)
-            '--geo-bypass',
-            '--no-playlist',
-            '--sleep-interval', '1',
-            '--max-sleep-interval', '3'
-        ];
-
-        if (!isWindows) {
-            // PRODUCTION (Render/Linux): Use robust clients and correctly formatted tokens
-            // yt-dlp expects "CLIENT.CONTEXT+PO_TOKEN" for each context
-            // We provide tokens for all clients we use to ensure stability
-            const contexts = [
-                'web.player', 'web.gvs',
-                'android.player', 'android.gvs',
-                'ios.player', 'ios.gvs',
-                'tv.player', 'tv.gvs'
-            ];
-            const formattedPo = poToken ? contexts.map(ctx => `${ctx}+${poToken}`).join(',') : '';
-
-            // Prioritize android and ios clients which are more resilient
-            args.push('--extractor-args', `youtube:player-client=android,ios,tvhtml5,web${formattedPo ? `;po_token=${formattedPo}` : ''}${visitorData ? `;visitor_data=${visitorData}` : ''}`);
-
-            // Prefer m4a for better browser compatibility
-            args[args.indexOf('-f') + 1] = 'bestaudio[ext=m4a]/bestaudio/best';
-
-            // Add more IP-friendly options for Render
-            args[args.indexOf('--sleep-interval') + 1] = '2';
-            args[args.indexOf('--max-sleep-interval') + 1] = '5';
-        } else {
-            // WINDOWS (Local): Keep it simple. Only add extractor-args if tokens are explicitly provided.
-            if (poToken || visitorData) {
-                let extractorArgs = `youtube:player-client=ios,web,mweb`;
-                if (poToken) extractorArgs += `;po_token=${poToken}`;
-                if (visitorData) extractorArgs += `;visitor_data=${visitorData}`;
-                args.push('--extractor-args', extractorArgs);
-            }
-        }
-
-        // Add generic user agent
-        args.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-
-        // If cookies are provided in env, we apply them
-        if (cookiesStr) {
-            if (cookiesStr.includes('\t') || cookiesStr.startsWith('#')) {
-                // Likely a Netscape file content
-                try {
-                    const formattedCookies = cookiesStr.startsWith('#') ? cookiesStr : `# Netscape HTTP Cookie File\n${cookiesStr}`;
-                    fs.writeFileSync(cookiesPath, formattedCookies);
-                    args.push('--cookies', cookiesPath);
-                    console.log("Using provided YouTube cookies (Netscape format file).");
-                } catch (err) {
-                    console.error("Failed to write YouTube cookies to temp file:", err.message);
-                }
-            } else {
-                // PRODUCTION UPGRADE: Always write cookies to file even if raw header format
-                // yt-dlp is much more stable with --cookies than --add-header "Cookie:..."
-                try {
-                    fs.writeFileSync(cookiesPath, `# Netscape HTTP Cookie File\n${cookiesStr}`);
-                    args.push('--cookies', cookiesPath);
-                    console.log("Using provided YouTube cookies (Raw -> File conversion).");
-                } catch (err) {
-                    args.push('--add-header', `Cookie:${cookiesStr}`);
-                    console.warn("Failed to write raw cookies; falling back to header:", err.message);
-                }
-            }
-        }
-
-        const ytdl = spawn(binPath, args);
-        let audioUrl = '';
-
-        // Fix permissions on Linux/Docker/Render
-        if (!isWindows) {
-            try {
-                fs.chmodSync(binPath, '755');
-            } catch (e) {
-                console.error("Could not set yt-dlp permissions:", e.message);
-            }
-        }
-
-        ytdl.stdout.on('data', (data) => audioUrl += data.toString());
-        ytdl.stderr.on('data', (data) => {
-            const stderrStr = data.toString();
-            if (stderrStr.includes('ERROR') || stderrStr.includes('Warning')) {
-                console.error(`yt-dlp stderr: ${stderrStr}`);
-            }
-        });
-
-        ytdl.on('close', (code) => {
-            if (code !== 0) {
-                console.error(`yt-dlp failed with code ${code} for URL: ${url}. Attempting youtubei.js fallback...`);
-
-                // FALLBACK: Use youtubei.js (InnerTube) with client rotation if yt-dlp is blocked
-                const performFallback = async () => {
-                    const clients = ['ANDROID', 'IOS', 'TVHTML5', 'YTMUSIC', 'WEB'];
-                    for (const clientName of clients) {
-                        try {
-                            console.log(`Fallback attempt using ${clientName} client...`);
-                            const yt = await getInnerTube(clientName);
-                            const videoId = url.includes('v=') ? url.split('v=')[1].split('&')[0] : url.split('/').pop();
-
-                            // Innertube.create already has our poToken/visitorData
-                            const info = await yt.getBasicInfo(videoId, clientName);
-                            const format = info.chooseFormat({ type: 'audio', quality: 'best' });
-
-                            if (format && format.url) {
-                                console.log(`Fallback success: Extracted URL via InnerTube (${clientName}) for ${videoId}`);
-                                urlCache.set(url, { url: format.url, timestamp: Date.now() });
-                                pipeNativeAudio(format.url, req, res, isDownload);
-                                return true;
-                            }
-                        } catch (err) {
-                            console.warn(`${clientName} fallback failed:`, err.message);
-                        }
+                if (!isWindows) {
+                    const contexts = ['web.player', 'web.gvs', 'android.player', 'android.gvs', 'ios.player', 'ios.gvs', 'tv.player', 'tv.gvs'];
+                    const formattedPo = poToken ? contexts.map(ctx => `${ctx}+${poToken}`).join(',') : '';
+                    spawnArgs.push('--extractor-args', `youtube:player-client=tvhtml5,ios,android,web${formattedPo ? `;po_token=${formattedPo}` : ''}${visitorData ? `;visitor_data=${visitorData}` : ''}`);
+                    spawnArgs[spawnArgs.indexOf('-f') + 1] = 'bestaudio[ext=m4a]/bestaudio/best';
+                } else {
+                    if (poToken || visitorData) {
+                        let extractorArgs = `youtube:player-client=ios,web,mweb`;
+                        if (poToken) extractorArgs += `;po_token=${poToken}`;
+                        if (visitorData) extractorArgs += `;visitor_data=${visitorData}`;
+                        spawnArgs.push('--extractor-args', extractorArgs);
                     }
-                    return false;
-                };
+                }
 
-                performFallback().then(success => {
-                    if (!success && !res.headersSent) {
-                        res.status(500).json({
-                            error: "Extraction Failed",
-                            details: "YouTube is blocking all extraction methods. Try again later."
-                        });
+                spawnArgs.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
+
+                if (useCookies && cookiesStr) {
+                    // Prepare cookies file
+                    try {
+                        const formattedCookies = (cookiesStr.includes('\t') || cookiesStr.startsWith('#'))
+                            ? (cookiesStr.startsWith('#') ? cookiesStr : `# Netscape HTTP Cookie File\n${cookiesStr}`)
+                            : `# Netscape HTTP Cookie File\n${cookiesStr}`;
+                        fs.writeFileSync(cookiesPath, formattedCookies);
+                        spawnArgs.push('--cookies', cookiesPath);
+                    } catch (err) {
+                        spawnArgs.push('--add-header', `Cookie:${cookiesStr}`);
+                    }
+                }
+
+                console.log(`Spawning yt-dlp [Cookies: ${useCookies}, IP: ${extractionQueue.running}]...`);
+                const ytdl = spawn(binPath, spawnArgs);
+                let audioUrl = '';
+
+                if (!isWindows) {
+                    try { fs.chmodSync(binPath, '755'); } catch (e) { }
+                }
+
+                ytdl.stdout.on('data', (d) => audioUrl += d.toString());
+                ytdl.stderr.on('data', (d) => {
+                    const stderrStr = d.toString();
+                    if (stderrStr.includes('ERROR') || stderrStr.includes('Warning')) {
+                        console.error(`yt-dlp stderr: ${stderrStr}`);
                     }
                 });
-                return;
-            }
 
-            const cleanUrl = audioUrl.trim();
-            if (!cleanUrl) {
-                console.error("No YouTube audio URL extracted");
-                if (!res.headersSent) res.status(500).send("No URL found");
-                return;
-            }
+                ytdl.on('close', (code) => {
+                    resolve({ code, url: audioUrl.trim() });
+                });
+            });
+        };
 
-            console.log(`Successfully extracted URL for ${url.substring(0, 30)}...`);
-            urlCache.set(url, { url: cleanUrl, timestamp: Date.now() });
-            pipeNativeAudio(cleanUrl, req, res, isDownload);
-        });
-    }); // End of extractionQueue.add
+        // PHASE 2 FLOW: Primary (Cookies) -> Secondary (Guest Mode) -> Fallback (InnerTube)
+        let result = await attemptExtraction(true);
+
+        if (result.code !== 0 && cookiesStr) {
+            console.warn(`Primary extraction failed for ${url}. Retrying in GUEST MODE...`);
+            result = await attemptExtraction(false);
+        }
+
+        if (result.code !== 0) {
+            console.error(`yt-dlp definitively failed for ${url}. Attempting youtubei.js rotation...`);
+
+            const performFallback = async () => {
+                const clients = ['TVHTML5', 'IOS', 'ANDROID', 'YTMUSIC', 'WEB'];
+                for (const clientName of clients) {
+                    try {
+                        console.log(`Fallback attempt using ${clientName} client...`);
+                        const yt = await getInnerTube(clientName);
+                        const videoId = url.includes('v=') ? url.split('v=')[1].split('&')[0] : url.split('/').pop();
+
+                        const info = await yt.getBasicInfo(videoId, clientName);
+                        const format = info.chooseFormat({ type: 'audio', quality: 'best' });
+
+                        if (format && format.url) {
+                            console.log(`Fallback success: Extracted URL via InnerTube (${clientName}) for ${videoId}`);
+                            urlCache.set(url, { url: format.url, timestamp: Date.now() });
+                            pipeNativeAudio(format.url, req, res, isDownload);
+                            return true;
+                        }
+                    } catch (err) {
+                        console.warn(`${clientName} fallback failed:`, err.message);
+                    }
+                }
+                return false;
+            };
+
+            const success = await performFallback();
+            if (!success && !res.headersSent) {
+                res.status(500).json({ error: "YouTube Extraction Failed", details: "All bypass methods exhausted (Phase 2)." });
+            }
+            return;
+        }
+
+        const cleanUrl = result.url;
+        console.log(`Successfully extracted URL for ${url.substring(0, 30)}...`);
+        urlCache.set(url, { url: cleanUrl, timestamp: Date.now() });
+        pipeNativeAudio(cleanUrl, req, res, isDownload);
+    });
 };
 
 const pipeNativeAudio = (targetUrl, expressReq, expressRes, isDownload = false) => {
     const urlObj = new URL(targetUrl);
-
     const options = {
         hostname: urlObj.hostname,
         path: urlObj.pathname + urlObj.search,
@@ -308,18 +269,13 @@ const pipeNativeAudio = (targetUrl, expressReq, expressRes, isDownload = false) 
         }
     };
 
-    // Forward the Range header to YouTube for seeking support
     if (expressReq && expressReq.headers.range && !isDownload) {
         options.headers['Range'] = expressReq.headers.range;
     }
 
     const request = https.get(options, (response) => {
-        // Forward HTTP status (could be 200 OK or 206 Partial Content)
         expressRes.status(response.statusCode);
-
         const headers = { ...response.headers };
-
-        // Critical headers for mobile browsers and audio elements
         headers['Content-Type'] = response.headers['content-type'] || 'audio/mp4';
         headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
         headers['Pragma'] = 'no-cache';
@@ -330,13 +286,8 @@ const pipeNativeAudio = (targetUrl, expressReq, expressRes, isDownload = false) 
         if (isDownload) {
             let title = expressReq?.query?.title || 'Unknown Title';
             let artist = expressReq?.query?.artist || 'Unknown Artist';
-
-            // Sanitize filename for HTTP header safety and filesystem compatibility
             let safeFilename = `${artist} - ${title}.m4a`.replace(/[^a-zA-Z0-9 \-()_.]/g, '');
-            if (!safeFilename.trim() || safeFilename === '.m4a') {
-                safeFilename = 'song.m4a';
-            }
-
+            if (!safeFilename.trim() || safeFilename === '.m4a') safeFilename = 'song.m4a';
             headers['Content-Disposition'] = `attachment; filename="${safeFilename}"`;
         } else {
             headers['Accept-Ranges'] = 'bytes';
@@ -344,22 +295,16 @@ const pipeNativeAudio = (targetUrl, expressReq, expressRes, isDownload = false) 
         }
 
         expressRes.set(headers);
-
-        // Pipe directly to client! Huge CPU save!
         response.pipe(expressRes);
     });
 
     request.on('error', (err) => {
         console.error("Native pipe error:", err.message);
-        if (!expressRes.headersSent) {
-            expressRes.status(500).send("Streaming error");
-        }
+        if (!expressRes.headersSent) expressRes.status(500).send("Streaming error");
     });
 
     if (expressReq) {
-        expressReq.on('close', () => {
-            request.destroy(); // Stop fetching if client disconnects
-        });
+        expressReq.on('close', () => request.destroy());
     }
 };
 
@@ -367,14 +312,10 @@ exports.getStream = (url) => {
     const isWindows = process.platform === 'win32';
     const binPath = path.join(BIN_DIR, isWindows ? 'yt-dlp.exe' : 'yt-dlp');
     const cookiesStr = process.env.YT_COOKIES;
-
     const args = [url, '-f', 'bestaudio', '-o', '-', '--no-playlist'];
-    if (cookiesStr) {
-        if (!cookiesStr.includes('\t') && !cookiesStr.startsWith('#')) {
-            args.push('--add-header', `Cookie:${cookiesStr}`);
-        }
+    if (cookiesStr && !cookiesStr.includes('\t') && !cookiesStr.startsWith('#')) {
+        args.push('--add-header', `Cookie:${cookiesStr}`);
     }
-
     const ytdl = spawn(binPath, args);
     return ytdl.stdout;
 };
