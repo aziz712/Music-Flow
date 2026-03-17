@@ -8,8 +8,8 @@ const https = require('https');
 const { Innertube, UniversalCache } = require('youtubei.js');
 
 // These are session-bound tokens to bypass "Sign in to confirm you're not a bot"
-const DEFAULT_VISITOR_DATA = "Cgt4OTl5elhPNUlvOCiXvuLNBjIKCgJUThIEGgAgQmLfAgrcAjE2LllUPVgwM1plSGpzNjZybHo2SEwwUVU4Q3dzMzZLUTJuZC1fN0t1N0ViMkNNZ3M5b3djeDhWUjZaVnNQcE9TUnJvZzN2eXV4MXRjQXBsdllFSWpwVktBRjJoanJhZmtPeDBjdE5TX0Z0eDJWSzFGaVlXNlRON01IcUFQNGQ0dzJfY1NYSVJ4X1ZTNFFqdHBhbkRhNVRQVDhIOHVrUTVkMW9tV3RYNVVHVjk4TDdMbFEwWHhJVHJZeTY2aGlSZm1hTm5aZlNNTE9ZWDVVZEZqRWJ4aXB4bmtiVGdVQlFTSVdSZU01VmNlTkY5N0hZSmNKN2M3WEk1SHR4cDB3QVhhdEdfNTQ5Y1hkRVRlaVYyRXFQQmNlblIxaHp2UlQ4SXViSzZndFh1Qk5ZbnJvVFhyTFVyVFZ4OWo3UDYxTUxqV3o3Y0JUUUptcFJWbERkUnV1UHhtZTJURzdrZw==";
-const DEFAULT_PO_TOKEN = "Mlgg2-pXeGjF2yCaQ0lm-m3oPrELTcPnp6MphPi79bWrb4zYOrq7XFZMoT9Xviuzul22ibhU9QuNcCjV9pAI3w1V3M9x2z2pKiXWbhzH6jOWE1S1zC7O8siX";
+const DEFAULT_VISITOR_DATA = "Cgt4OTl5elhPNUlvOCi81uLNBjIKCgJUThIEGgAgQmLfAgrcAjE2LllUPVgwM1plSGpzNjZybHo2SEwwUVU4Q3dzMzZLUTJuZC1fN0t1N0ViMkNNZ3M5b3djeDhWUjZaVnNQcE9TUnJvZzN2eXV4MXRjQXBsdllFSWpwVktBRjJoanJhZmtPeDBjdE5TX0Z0eDJWSzFGaVlXNlRON01IcUFQNGQ0dzJfY1NYSVJ4X1ZTNFFqdHBhbkRhNVRQVDhIOHVrUTVkMW9tV3RYNVVHVjk4TDdMbFEwWHhJVHJZeTY2aGlSZm1hTm5aZlNNTE9ZWDVVZEZqRWJ4aXB4bmtiVGdVQlFTSVdSZU01VmNlTkY5N0hZSmNKN2M3WEk1SHR4cDB3QVhhdEdfNTQ5Y1hkRVRlaVYyRXFQQmNlblIxaHp2UlQ4SXViSzZndFh1Qk5ZbnJvVFhyTFVyVFZ4OWo3UDYxTUxqV3o3Y0JUUUptcFJWbERkUnV1UHhtZTJURzdrZw==";
+const DEFAULT_PO_TOKEN = "MlOf4yezUFrFl5_f5as_wcRchC9EzFrz4JZznIR1zACbNAxBWBtAZJUk1-GqkFXjy5KYxt8YFLugonHJV3rRgzqLZuBOyIH6XgxL2j4Zl4BWMwAPAw==";
 
 // Production-Grade Extraction Queue to prevent HTTP 429
 class ExtractionQueue {
@@ -164,11 +164,25 @@ exports.streamProxy = (url, res, req, isDownload = false) => {
 
         if (!isWindows) {
             // PRODUCTION (Render/Linux): Use robust clients and correctly formatted tokens
-            // yt-dlp expects "CLIENT.CONTEXT+TOKEN" for po_token
-            const formattedPo = poToken ? `web.player+${poToken},web.gvs+${poToken}` : '';
-            args.push('--extractor-args', `youtube:player-client=ios,android,web${formattedPo ? `;po_token=${formattedPo}` : ''}${visitorData ? `;visitor_data=${visitorData}` : ''}`);
+            // yt-dlp expects "CLIENT.CONTEXT+PO_TOKEN" for each context
+            // We provide tokens for all clients we use to ensure stability
+            const contexts = [
+                'web.player', 'web.gvs',
+                'android.player', 'android.gvs',
+                'ios.player', 'ios.gvs',
+                'tv.player', 'tv.gvs'
+            ];
+            const formattedPo = poToken ? contexts.map(ctx => `${ctx}+${poToken}`).join(',') : '';
+
+            // Prioritize android and ios clients which are more resilient
+            args.push('--extractor-args', `youtube:player-client=android,ios,tvhtml5,web${formattedPo ? `;po_token=${formattedPo}` : ''}${visitorData ? `;visitor_data=${visitorData}` : ''}`);
+
             // Prefer m4a for better browser compatibility
             args[args.indexOf('-f') + 1] = 'bestaudio[ext=m4a]/bestaudio/best';
+
+            // Add more IP-friendly options for Render
+            args[args.indexOf('--sleep-interval') + 1] = '2';
+            args[args.indexOf('--max-sleep-interval') + 1] = '5';
         } else {
             // WINDOWS (Local): Keep it simple. Only add extractor-args if tokens are explicitly provided.
             if (poToken || visitorData) {
@@ -234,12 +248,14 @@ exports.streamProxy = (url, res, req, isDownload = false) => {
 
                 // FALLBACK: Use youtubei.js (InnerTube) with client rotation if yt-dlp is blocked
                 const performFallback = async () => {
-                    const clients = ['ANDROID', 'TV', 'WEB'];
+                    const clients = ['ANDROID', 'IOS', 'TVHTML5', 'YTMUSIC', 'WEB'];
                     for (const clientName of clients) {
                         try {
                             console.log(`Fallback attempt using ${clientName} client...`);
                             const yt = await getInnerTube(clientName);
                             const videoId = url.includes('v=') ? url.split('v=')[1].split('&')[0] : url.split('/').pop();
+
+                            // Innertube.create already has our poToken/visitorData
                             const info = await yt.getBasicInfo(videoId, clientName);
                             const format = info.chooseFormat({ type: 'audio', quality: 'best' });
 
