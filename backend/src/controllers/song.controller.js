@@ -58,7 +58,7 @@ exports.downloadSong = async (req, res, next) => {
         // 3. Stream if we have a valid YouTube URL
         if (downloadUrl) {
             console.log(`Initiating stream for: ${title} - ${artist} (${downloadUrl}) [isDownload: ${req.query.download === 'true'}]`);
-            youtubeService.streamProxy(downloadUrl, res, req, req.query.download === 'true');
+            await youtubeService.streamProxy(downloadUrl, res, req, req.query.download === 'true');
             return;
         }
 

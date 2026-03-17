@@ -6,47 +6,13 @@ const { PassThrough } = require('stream');
 const fs = require('fs');
 const https = require('https');
 const { Innertube, UniversalCache } = require('youtubei.js');
+const cacheService = require('./cache.service');
+const queueService = require('./queue.service');
 
 // These are session-bound tokens to bypass "Sign in to confirm you're not a bot"
 const DEFAULT_VISITOR_DATA = "Cgt4OTl5elhPNUlvOCj35OLNBjIKCgJUThIEGgAgQmLfAgrcAjE2LllUPVgwM1plSGpzNjZybHo2SEwwUVU4Q3dzMzZLUTJuZC1fN0t1N0ViMkNNZ3M5b3djeDhWUjZaVnNQcE9TUnJvZzN2eXV4MXRjQXBsdllFSWpwVktBRjJoanJhZmtPeDBjdE5TX0Z0eDJWSzFGaVlXNlRON01IcUFQNGQ0dzJfY1NYSVJ4X1ZTNFFqdHBhbkRhNVRQVDhIOHVrUTVkMW9tV3RYNVVHVjk4TDdMbFEwWHhJVHJZeTY2aGlSZm1hTm5aZlNNTE9ZWDVVZEZqRWJ4aXB4bmtiVGdVQlFTSVdSZU01VmNlTkY5N0hZSmNKN2M3WEk1SHR4cDB3QVhhdEdfNTQ5Y1hkRVRlaVYyRXFQQmNlblIxaHp2UlQ4SXViSzZndFh1Qk5ZbnJvVFhyTFVyVFZ4OWo3UDYxTUxqV3o3Y0JUUUptcFJWbERkUnV1UHhtZTJURzdrZw==";
 const DEFAULT_PO_TOKEN = "MlPqnxyOzHXoIuqj6Qex64MEVyXhXuFFfUFc7SqXGMJb0Xy9z-yj1V1RtWyB6ziKsLxxQ9eOXPCV8pFoOS-jEAZwFxuxhRR8-juK0IyJGV1B9yBYuQ==";
 
-// Production-Grade Extraction Queue to prevent HTTP 429
-class ExtractionQueue {
-    constructor(concurrency = 1) {
-        this.concurrency = concurrency;
-        this.running = 0;
-        this.queue = [];
-    }
-
-    async add(task) {
-        return new Promise((resolve, reject) => {
-            this.queue.push(async () => {
-                try {
-                    const res = await task();
-                    resolve(res);
-                } catch (err) {
-                    reject(err);
-                }
-            });
-            this.next();
-        });
-    }
-
-    async next() {
-        if (this.running >= this.concurrency || this.queue.length === 0) return;
-        this.running++;
-        const task = this.queue.shift();
-        try {
-            await task();
-        } finally {
-            this.running--;
-            this.next();
-        }
-    }
-}
-
-const extractionQueue = new ExtractionQueue(1); // Single-threaded extraction for cloud IPs
 
 let innerTube;
 const getInnerTube = async () => {
@@ -85,9 +51,6 @@ if (process.platform === 'win32') {
     updater.stderr.on('data', (d) => console.warn(`yt-dlp-update-err: ${d}`));
 }
 
-// Simple in-memory cache for stream URLs to avoid re-spawning yt-dlp
-const urlCache = new Map();
-const CACHE_TTL = 1000 * 60 * 60; // 1 hour
 
 exports.search = async (query) => {
     try {
@@ -116,191 +79,246 @@ exports.search = async (query) => {
     }
 };
 
-exports.streamProxy = (url, res, req, isDownload = false) => {
+const streamCachedFile = (filePath, res, req, isDownload, videoId) => {
+    try {
+        const stat = fs.statSync(filePath);
+        const fileSize = stat.size;
+
+        const headers = {
+            'Content-Type': 'audio/mpeg',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0',
+            'Access-Control-Allow-Origin': '*',
+            'Cross-Origin-Resource-Policy': 'cross-origin'
+        };
+
+        if (isDownload) {
+            let title = req?.query?.title || 'Unknown Title';
+            let artist = req?.query?.artist || 'Unknown Artist';
+            let safeFilename = `${artist} - ${title}.mp3`.replace(/[^a-zA-Z0-9 \-()_.]/g, '');
+            if (!safeFilename.trim() || safeFilename === '.mp3') safeFilename = `${videoId}.mp3`;
+            headers['Content-Disposition'] = `attachment; filename="${safeFilename}"`;
+            headers['Content-Length'] = fileSize;
+            res.status(200).set(headers);
+            fs.createReadStream(filePath).pipe(res);
+            return;
+        }
+
+        if (req.headers.range) {
+            const parts = req.headers.range.replace(/bytes=/, "").split("-");
+            const start = parseInt(parts[0], 10);
+            const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+            const chunksize = (end - start) + 1;
+            headers['Content-Range'] = `bytes ${start}-${end}/${fileSize}`;
+            headers['Content-Length'] = chunksize;
+            headers['Accept-Ranges'] = 'bytes';
+            res.status(206).set(headers);
+            fs.createReadStream(filePath, { start, end }).pipe(res);
+        } else {
+            headers['Content-Length'] = fileSize;
+            headers['Accept-Ranges'] = 'bytes';
+            res.status(200).set(headers);
+            fs.createReadStream(filePath).pipe(res);
+        }
+    } catch (e) {
+        console.error(`[STREAM ERROR] Could not read cache file ${filePath}:`, e.message);
+        if (!res.headersSent) res.status(500).json({ error: 'Streaming Error' });
+    }
+};
+
+const downloadAndCacheAudio = async (url, videoId, cachePath) => {
     const isWindows = process.platform === 'win32';
     const binPath = path.join(BIN_DIR, isWindows ? 'yt-dlp.exe' : 'yt-dlp');
-
-    // Check Cache
-    const cached = urlCache.get(url);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-        pipeNativeAudio(cached.url, req, res, isDownload);
-        return;
-    }
 
     const cookiesStr = process.env.YT_COOKIES;
     let poToken = process.env.YT_PO_TOKEN || DEFAULT_PO_TOKEN;
     let visitorData = process.env.YT_VISITOR_DATA || DEFAULT_VISITOR_DATA;
     const cookiesPath = path.join(process.platform === 'win32' ? process.env.TEMP || 'C:\\Windows\\Temp' : '/tmp', 'yt_cookies.txt');
 
-    // QUEUED TASK: Wrap extraction in the queue to prevent 429s
-    extractionQueue.add(async () => {
-        // Double check cache inside queue
-        const cachedInside = urlCache.get(url);
-        if (cachedInside && Date.now() - cachedInside.timestamp < CACHE_TTL) {
-            pipeNativeAudio(cachedInside.url, req, res, isDownload);
-            return;
-        }
+    const tempCachePath = `${cachePath}.part`;
 
-        const attemptExtraction = (useCookies = true) => {
-            return new Promise((resolve) => {
-                // Use multiple clients and geo-bypass to reduce bot detection
-                const spawnArgs = [
-                    url,
-                    '-g',
-                    '-f', 'bestaudio',
-                    '--geo-bypass',
-                    '--no-playlist',
-                    '--sleep-interval', '2',
-                    '--max-sleep-interval', '5',
-                    '--force-ipv4', // Bypass flagged IPv6 ranges on Render
-                    '--add-header', 'sec-ch-ua:"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
-                    '--add-header', 'sec-ch-ua-mobile:?0',
-                    '--add-header', 'sec-ch-ua-platform:"Windows"'
-                ];
+    const attemptExtraction = (useCookies) => {
+        return new Promise((resolve) => {
+            const spawnArgs = [
+                url,
+                '-f', 'bestaudio/best', // Broaden format selection
+                '--no-playlist',
+                '--geo-bypass',
+                '--force-ipv4', // Bypass flagged IPv6 ranges on Render
+                '-o', '-' // Output to stdout
+            ];
 
-                if (!isWindows) {
-                    const contexts = ['web.player', 'web.gvs', 'android.player', 'android.gvs', 'ios.player', 'ios.gvs', 'tv.player', 'tv.gvs'];
-                    // Apply PoToken to all relevant contexts
-                    const formattedPo = poToken ? contexts.map(ctx => `${ctx}+${poToken}`).join(',') : '';
-                    spawnArgs.push('--extractor-args', `youtube:player-client=tvhtml5,ios,android,web${formattedPo ? `;po_token=${formattedPo}` : ''}${visitorData ? `;visitor_data=${visitorData}` : ''}`);
-                    spawnArgs[spawnArgs.indexOf('-f') + 1] = 'bestaudio[ext=m4a]/bestaudio/best';
-                } else {
-                    if (poToken || visitorData) {
-                        spawnArgs.push('--extractor-args', `youtube:player-client=ios,web,mweb${poToken ? `;po_token=${poToken}` : ''}${visitorData ? `;visitor_data=${visitorData}` : ''}`);
-                    }
+            if (!isWindows) {
+                const contexts = ['web.player', 'web.gvs', 'android.player', 'android.gvs', 'ios.player', 'ios.gvs', 'tv.player', 'tv.gvs'];
+                const formattedPo = poToken ? contexts.map(ctx => `${ctx}+${poToken}`).join(',') : '';
+                spawnArgs.push('--extractor-args', `youtube:player-client=android,web,tv${formattedPo ? `;po_token=${formattedPo}` : ''}${visitorData ? `;visitor_data=${visitorData}` : ''}`);
+            } else {
+                if (poToken || visitorData) {
+                    spawnArgs.push('--extractor-args', `youtube:player-client=android,web,tv${poToken ? `;po_token=${poToken}` : ''}${visitorData ? `;visitor_data=${visitorData}` : ''}`);
                 }
-
-                spawnArgs.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
-
-                if (useCookies && cookiesStr) {
-                    try {
-                        const formattedCookies = (cookiesStr.includes('\t') || cookiesStr.startsWith('#'))
-                            ? (cookiesStr.startsWith('#') ? cookiesStr : `# Netscape HTTP Cookie File\n${cookiesStr}`)
-                            : `# Netscape HTTP Cookie File\n${cookiesStr}`;
-                        fs.writeFileSync(cookiesPath, formattedCookies);
-                        spawnArgs.push('--cookies', cookiesPath);
-                    } catch (err) {
-                        spawnArgs.push('--add-header', `Cookie:${cookiesStr}`);
-                    }
-                }
-
-                console.log(`Spawning yt-dlp [Cookies: ${useCookies}, IP: ${extractionQueue.running}]...`);
-                const ytdl = spawn(binPath, spawnArgs);
-                let audioUrl = '';
-
-                if (!isWindows) {
-                    try { fs.chmodSync(binPath, '755'); } catch (e) { }
-                }
-
-                ytdl.stdout.on('data', (d) => audioUrl += d.toString());
-                ytdl.stderr.on('data', (d) => {
-                    const str = d.toString();
-                    if (str.includes('ERROR') || str.includes('Warning')) console.error(`yt-dlp stderr: ${str}`);
-                });
-
-                ytdl.on('close', (code) => {
-                    resolve({ code, url: audioUrl.trim() });
-                });
-            });
-        };
-
-        // PHASE 2.1 FLOW: Primary (Cookies) -> Secondary (Guest Mode) -> Fallback (InnerTube Rotation)
-        let result = await attemptExtraction(true);
-
-        if (result.code !== 0 && cookiesStr) {
-            console.warn(`Primary extraction failed for ${url}. Retrying in GUEST MODE...`);
-            result = await attemptExtraction(false);
-        }
-
-        if (result.code !== 0) {
-            console.error(`yt-dlp definitively failed for ${url}. Attempting InnerTube rotation...`);
-
-            const performFallback = async () => {
-                // Corrected client names and options for InnerTube v17
-                const clients = ['TVHTML5', 'ANDROID', 'IOS', 'WEB'];
-                for (const clientName of clients) {
-                    try {
-                        console.log(`Fallback attempt using ${clientName} client...`);
-                        const yt = await getInnerTube();
-                        const videoId = url.includes('v=') ? url.split('v=')[1].split('&')[0] : url.split('/').pop();
-
-                        // Pass client as an option object correctly
-                        const info = await yt.getBasicInfo(videoId, { client: clientName });
-                        const format = info.chooseFormat({ type: 'audio', quality: 'best' });
-
-                        if (format && format.url) {
-                            console.log(`Fallback success: Extracted URL via InnerTube (${clientName}) for ${videoId}`);
-                            urlCache.set(url, { url: format.url, timestamp: Date.now() });
-                            pipeNativeAudio(format.url, req, res, isDownload);
-                            return true;
-                        }
-                    } catch (err) {
-                        console.warn(`${clientName} fallback failed:`, err.message);
-                    }
-                }
-                return false;
-            };
-
-            const success = await performFallback();
-            if (!success && !res.headersSent) {
-                res.status(500).json({ error: "YouTube Extraction Failed", details: "All bypass methods exhausted (Phase 2.1)." });
             }
-            return;
-        }
 
-        const cleanUrl = result.url;
-        console.log(`Successfully extracted URL for ${url.substring(0, 30)}...`);
-        urlCache.set(url, { url: cleanUrl, timestamp: Date.now() });
-        pipeNativeAudio(cleanUrl, req, res, isDownload);
-    });
-};
+            spawnArgs.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
 
-const pipeNativeAudio = (targetUrl, expressReq, expressRes, isDownload = false) => {
-    const urlObj = new URL(targetUrl);
-    const options = {
-        hostname: urlObj.hostname,
-        path: urlObj.pathname + urlObj.search,
-        headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        }
+            if (useCookies && cookiesStr) {
+                try {
+                    const formattedCookies = (cookiesStr.includes('\t') || cookiesStr.startsWith('#'))
+                        ? (cookiesStr.startsWith('#') ? cookiesStr : `# Netscape HTTP Cookie File\n${cookiesStr}`)
+                        : `# Netscape HTTP Cookie File\n${cookiesStr}`;
+                    fs.writeFileSync(cookiesPath, formattedCookies);
+                    spawnArgs.push('--cookies', cookiesPath);
+                } catch (err) {
+                    spawnArgs.push('--add-header', `Cookie:${cookiesStr}`);
+                }
+            }
+
+            console.log(`[DOWNLOAD START] Spawning yt-dlp for ${videoId} [Cookies: ${useCookies}]...`);
+            const ytdl = spawn(binPath, spawnArgs);
+            if (!isWindows) {
+                try { fs.chmodSync(binPath, '755'); } catch (e) { }
+            }
+
+            const ffmpeg = spawn('ffmpeg', [
+                '-i', 'pipe:0',
+                '-f', 'mp3',
+                '-acodec', 'libmp3lame',
+                '-ab', '128k',
+                '-y',
+                tempCachePath
+            ]);
+
+            let ytdlError = '';
+            let ffmpegError = '';
+
+            ytdl.stdout.pipe(ffmpeg.stdin);
+
+            ytdl.stderr.on('data', (d) => {
+                const str = d.toString();
+                if (str.includes('ERROR') || str.includes('Warning')) ytdlError += str;
+            });
+
+            ffmpeg.stderr.on('data', (d) => {
+                ffmpegError += d.toString();
+            });
+
+            ffmpeg.on('close', (code) => {
+                if (code === 0 && fs.existsSync(tempCachePath) && fs.statSync(tempCachePath).size > 0) {
+                    fs.renameSync(tempCachePath, cachePath);
+                    console.log(`[DOWNLOAD COMPLETE] Cached ${videoId}`);
+                    resolve(true);
+                } else {
+                    if (fs.existsSync(tempCachePath)) fs.unlinkSync(tempCachePath);
+                    console.error(`[FFMPEG ERROR] Extraction failed for ${videoId}: Exited with code ${code}. ytdlp error: ${ytdlError}`);
+                    resolve(false);
+                }
+            });
+
+            ytdl.on('error', (err) => {
+                console.error(`yt-dlp spawn error: ${err.message}`);
+                resolve(false);
+            });
+
+            ffmpeg.on('error', (err) => {
+                console.error(`ffmpeg spawn error: ${err.message}`);
+                resolve(false);
+            });
+        });
     };
 
-    if (expressReq && expressReq.headers.range && !isDownload) {
-        options.headers['Range'] = expressReq.headers.range;
+    let success = await attemptExtraction(true);
+    if (!success && cookiesStr) {
+        console.warn(`[RETRY] Primary extraction failed for ${videoId}. Retrying in GUEST MODE...`);
+        success = await attemptExtraction(false);
     }
 
-    const request = https.get(options, (response) => {
-        expressRes.status(response.statusCode);
-        const headers = { ...response.headers };
-        headers['Content-Type'] = response.headers['content-type'] || 'audio/mp4';
-        headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
-        headers['Pragma'] = 'no-cache';
-        headers['Expires'] = '0';
-        headers['Access-Control-Allow-Origin'] = '*';
-        headers['Cross-Origin-Resource-Policy'] = 'cross-origin';
+    if (!success) {
+        console.error(`[STREAM ERROR] yt-dlp definitively failed for ${videoId}. Attempting InnerTube rotation...`);
+        const performFallback = async () => {
+            const clients = ['ANDROID', 'WEB']; // Dropped IOS and TVHTML5 entirely
+            for (const clientName of clients) {
+                try {
+                    console.log(`[RETRY] Fallback attempt using InnerTube ${clientName} client...`);
+                    const yt = await getInnerTube();
+                    const info = await yt.getBasicInfo(videoId, { client: clientName });
+                    const format = info.chooseFormat({ type: 'audio', quality: 'best' });
 
-        if (isDownload) {
-            let title = expressReq?.query?.title || 'Unknown Title';
-            let artist = expressReq?.query?.artist || 'Unknown Artist';
-            let safeFilename = `${artist} - ${title}.m4a`.replace(/[^a-zA-Z0-9 \-()_.]/g, '');
-            if (!safeFilename.trim() || safeFilename === '.m4a') safeFilename = 'song.m4a';
-            headers['Content-Disposition'] = `attachment; filename="${safeFilename}"`;
-        } else {
-            headers['Accept-Ranges'] = 'bytes';
-            headers['Connection'] = 'keep-alive';
+                    if (format && format.url) {
+                        console.log(`[FALLBACK HIT] Extracted URL via InnerTube (${clientName}). Downloading with ffmpeg...`);
+                        const downloadSuccess = await new Promise((resolve) => {
+                            const userAgentFallback = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
+                            const ffmpegFallback = spawn('ffmpeg', [
+                                '-headers', `User-Agent: ${userAgentFallback}\r\n`,
+                                '-i', format.url,
+                                '-f', 'mp3',
+                                '-acodec', 'libmp3lame',
+                                '-ab', '128k',
+                                '-y',
+                                tempCachePath
+                            ]);
+
+                            ffmpegFallback.on('close', (code) => {
+                                if (code === 0 && fs.existsSync(tempCachePath) && fs.statSync(tempCachePath).size > 0) {
+                                    fs.renameSync(tempCachePath, cachePath);
+                                    console.log(`[DOWNLOAD COMPLETE] Cached ${videoId} via fallback`);
+                                    resolve(true);
+                                } else {
+                                    if (fs.existsSync(tempCachePath)) fs.unlinkSync(tempCachePath);
+                                    resolve(false);
+                                }
+                            });
+
+                            ffmpegFallback.on('error', () => resolve(false));
+                        });
+                        if (downloadSuccess) return true;
+                    }
+                } catch (err) {
+                    console.warn(`[FALLBACK ERROR] ${clientName} failed:`, err.message);
+                }
+            }
+            return false;
+        };
+
+        success = await performFallback();
+
+        if (!success) {
+            throw new Error("All extraction methods exhausted.");
         }
+    }
+};
 
-        expressRes.set(headers);
-        response.pipe(expressRes);
-    });
+exports.streamProxy = async (url, res, req, isDownload = false) => {
+    const videoId = url.includes('v=') ? url.split('v=')[1].split('&')[0] : url.split('/').pop();
+    const cachePath = cacheService.getCachePath(videoId);
 
-    request.on('error', (err) => {
-        console.error("Native pipe error:", err.message);
-        if (!expressRes.headersSent) expressRes.status(500).send("Streaming error");
-    });
+    console.log(`[STREAM REQUEST] Initiating stream for ${videoId}`);
 
-    if (expressReq) {
-        expressReq.on('close', () => request.destroy());
+    if (cacheService.isCached(videoId)) {
+        console.log(`[CACHE HIT] Streaming ${videoId} instantly.`);
+        return streamCachedFile(cachePath, res, req, isDownload, videoId);
+    }
+
+    console.log(`[CACHE MISS] Queuing extraction for ${videoId}. [Waiting: ${queueService.getWaitingCount()}]`);
+
+    try {
+        await queueService.addJob(async () => {
+            if (cacheService.isCached(videoId)) {
+                return;
+            }
+            await downloadAndCacheAudio(url, videoId, cachePath);
+        });
+
+        // If the cache was successfully built, stream the new file
+        if (cacheService.isCached(videoId)) {
+            return streamCachedFile(cachePath, res, req, isDownload, videoId);
+        } else {
+            throw new Error("Unable to retrieve audio data");
+        }
+    } catch (err) {
+        console.error(`[STREAM ERROR] ${err.message}`);
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Streaming Failed', details: err.message });
+        }
     }
 };
 
